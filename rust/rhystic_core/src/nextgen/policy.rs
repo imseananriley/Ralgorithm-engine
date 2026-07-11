@@ -5,7 +5,7 @@ use std::hash::Hash;
 use super::{InformationModel, InformationTransition, SearchMetrics};
 
 pub trait CompiledPolicy<S> {
-    fn choose(&self, state: S, action_count: usize) -> Option<usize>;
+    fn choose(&self, state: S, transitions: &[InformationTransition<S>]) -> Option<usize>;
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -74,7 +74,7 @@ where
         self.metrics.strategic_actions_generated += transitions.len() as u64;
         let value = self
             .policy
-            .choose(state, transitions.len())
+            .choose(state, &transitions)
             .and_then(|index| transitions.into_iter().nth(index))
             .map(|transition| match transition {
                 InformationTransition::Deterministic(next) => self.value(next, depth - 1),

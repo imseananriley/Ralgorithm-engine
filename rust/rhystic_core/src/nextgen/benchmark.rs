@@ -213,6 +213,9 @@ pub struct OpeningModelBenchReport {
     pub iterations: u64,
     pub elapsed_seconds: f64,
     pub solves_per_second: f64,
+    pub microstep_elapsed_seconds: f64,
+    pub microstep_solves_per_second: f64,
+    pub direct_speedup: f64,
     pub states_expanded_per_solve: u64,
     pub transposition_hits_per_solve: u64,
     pub chance_nodes_per_solve: u64,
@@ -229,7 +232,10 @@ pub fn bench_opening_model(iterations: u64) -> OpeningModelBenchReport {
         "Blank 2".to_string(),
     ])
     .expect("opening benchmark deck");
-    let model = EngineOpeningModel::compile(&deck, 2);
+    let direct_model = EngineOpeningModel::compile(&deck, 2).with_resource_microsteps(false);
+    let microstep_model = EngineOpeningModel::compile(&deck, 2)
+        .with_direct_payments(false)
+        .with_resource_microsteps(true);
     let mut state = PackedStateV2 {
         library: PackedLibrary::new([1, 3, 4].into_iter().collect()),
         ..PackedStateV2::default()
@@ -241,17 +247,31 @@ pub fn bench_opening_model(iterations: u64) -> OpeningModelBenchReport {
     let mut metrics = SearchMetrics::default();
     let mut expected_value = 0.0;
     for _ in 0..iterations {
-        let result = ReferenceSolver::new(black_box(&model)).solve(black_box(state), 12);
+        let result = ReferenceSolver::new(black_box(&direct_model)).solve(black_box(state), 12);
         expected_value = result.value;
         metrics = result.metrics;
         checksum += result.value;
     }
     let elapsed_seconds = started.elapsed().as_secs_f64();
     black_box(checksum);
+    let microstep_started = Instant::now();
+    let mut microstep_checksum = 0.0;
+    for _ in 0..iterations {
+        let result = ReferenceSolver::new(black_box(&microstep_model)).solve(black_box(state), 12);
+        microstep_checksum += result.value;
+    }
+    let microstep_elapsed_seconds = microstep_started.elapsed().as_secs_f64();
+    black_box(microstep_checksum);
+    assert!((checksum - microstep_checksum).abs() < f64::EPSILON);
+    let solves_per_second = iterations as f64 / elapsed_seconds;
+    let microstep_solves_per_second = iterations as f64 / microstep_elapsed_seconds;
     OpeningModelBenchReport {
         iterations,
         elapsed_seconds,
-        solves_per_second: iterations as f64 / elapsed_seconds,
+        solves_per_second,
+        microstep_elapsed_seconds,
+        microstep_solves_per_second,
+        direct_speedup: solves_per_second / microstep_solves_per_second,
         states_expanded_per_solve: metrics.states_expanded,
         transposition_hits_per_solve: metrics.transposition_hits,
         chance_nodes_per_solve: metrics.chance_nodes,

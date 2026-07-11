@@ -1,5 +1,6 @@
 //! Fixed-size primitives for the nonanticipating reference and policy engines.
 
+mod batch;
 mod benchmark;
 mod card_mask;
 mod card_spec;
@@ -14,6 +15,10 @@ mod resource_transition;
 mod state;
 mod state_v2;
 
+pub use batch::{
+    independent_sample_selected, slot_permutation, BatchConfig, BatchEvaluation, BatchEvaluator,
+    BatchReport, DiscordanceRecord, VariantAccumulator, VariantSummary,
+};
 pub use benchmark::{
     bench_nextgen, bench_opening_model, bench_packed_state_v2, NextgenBenchReport,
     OpeningModelBenchReport, PackedStateV2BenchReport,
@@ -21,7 +26,7 @@ pub use benchmark::{
 pub use card_mask::{CardMask, SlotId, MAX_DECK_SLOTS};
 pub use card_spec::{
     ActionClass, ActionTemplateMask, CardFlags, CardMetadata, CardSpec, DeckSpec,
-    OpeningManaProfile,
+    OpeningArtifactKind, OpeningLandKind, OpeningManaProfile,
 };
 pub use library::{ChanceDraw, ClassChanceDraw, PackedLibrary, KNOWN_TOP_CAPACITY};
 pub use mana_closure::{
@@ -29,8 +34,11 @@ pub use mana_closure::{
     PaymentPlan, ResourceConsumption, ResourceUse,
 };
 pub use metrics::SearchMetrics;
-pub use multifidelity::{Estimate, MultiFidelityAccumulator};
-pub use opening_model::EngineOpeningModel;
+pub use multifidelity::{
+    evaluate_multifidelity, Estimate, MultiFidelityAccumulator, MultiFidelityConfig,
+    MultiFidelityReport,
+};
+pub use opening_model::{EngineOpeningModel, OpeningMulliganPolicy, VisibleOpeningPolicy};
 pub use policy::{evaluate_compiled_policy, CompiledPolicy, PolicyResult};
 pub use reference_solver::{
     InformationModel, InformationTransition, ReferenceResult, ReferenceSolver,
@@ -105,6 +113,18 @@ mod tests {
         assert!(draws
             .iter()
             .all(|draw| draw.numerator == 2 && draw.denominator == 4));
+    }
+
+    #[test]
+    fn library_shuffle_forgets_known_top_without_losing_cards() {
+        let mut library = PackedLibrary::new([2].into_iter().collect());
+        library.push_known_top(7);
+        library.push_known_top(11);
+        assert_eq!(library.known_top_len(), 2);
+
+        library.shuffle_all_unknown();
+        assert_eq!(library.known_top_len(), 0);
+        assert_eq!(library.cards(), [2, 7, 11].into_iter().collect());
     }
 
     #[test]
@@ -231,8 +251,8 @@ mod tests {
         .expect("opening model deck");
         let model = EngineOpeningModel::compile(&deck, 2);
 
-        assert_eq!(model.supported_slots().len(), 2);
-        assert_eq!(model.unsupported_slots().len(), 2);
+        assert_eq!(model.supported_slots().len(), 4);
+        assert_eq!(model.unsupported_slots().len(), 0);
     }
 
     #[test]
@@ -249,8 +269,216 @@ mod tests {
         assert_eq!(deck.card(0).opening_mana.color_mask, 0b1_1111);
         assert_eq!(deck.card(1).opening_mana.colorless, 1);
         assert!(deck.card(2).opening_mana.enters_tapped);
-        assert!(!deck.card(3).opening_mana.is_supported());
-        assert!(!deck.card(4).opening_mana.is_supported());
+        assert_eq!(
+            deck.card(3).opening_mana.kind,
+            OpeningLandKind::CityOfTraitors
+        );
+        assert_eq!(deck.card(4).opening_mana.kind, OpeningLandKind::Glimmervoid);
+    }
+
+    #[test]
+    fn land_only_reachability_matches_fast_oracle() {
+        use crate::fast_engine::solve_keep_fast;
+        use crate::SolveKeepRequest;
+
+        let cases = [
+            vec!["Command Tower", "Ancient Tomb", "Rhystic Study"],
+            vec!["City of Traitors", "Command Tower", "Rhystic Study"],
+            vec!["City of Traitors", "Ancient Tomb", "Rhystic Study"],
+            vec!["Crystal Vein", "Command Tower", "Rhystic Study"],
+            vec!["Glimmervoid", "Ancient Tomb", "Rhystic Study"],
+            vec!["Gemstone Mine", "Ancient Tomb", "Rhystic Study"],
+            vec!["Gemstone Caverns", "Ancient Tomb", "Rhystic Study"],
+            vec!["Tundra", "Ancient Tomb", "Rhystic Study"],
+            vec!["Tropical Island", "Ancient Tomb", "Heartwood Storyteller"],
+            vec!["Sink into Stupor", "Ancient Tomb", "Rhystic Study"],
+        ];
+
+        for (case_index, cards) in cases.into_iter().enumerate() {
+            let mut hand: Vec<String> = cards.into_iter().map(str::to_string).collect();
+            while hand.len() < 7 {
+                hand.push(format!("Blank {case_index} {}", hand.len()));
+            }
+            let deck = DeckSpec::compile(&hand).expect("land parity deck");
+            let model = EngineOpeningModel::compile(&deck, 2).with_resource_microsteps(false);
+            let state = PackedStateV2 {
+                hand: deck.card_mask(),
+                ..PackedStateV2::default()
+            };
+            let packed_hit = ReferenceSolver::new(&model).solve(state, 16).value > 0.0;
+            let fast = solve_keep_fast(&SolveKeepRequest {
+                hand: hand.clone(),
+                library: Vec::new(),
+                gemstone_live: false,
+                state_limit: 20_000,
+                max_turns: 2,
+                goal: "engine".to_string(),
+                engine_target_count: 1,
+                engine_success_policy: "resilient".to_string(),
+                remora_upkeep_payments: 2,
+                action_sort: true,
+                gamble_mode: None,
+                gamble_seed: None,
+                simplified_gamble: false,
+            });
+            assert_eq!(
+                packed_hit,
+                fast.turn.is_some(),
+                "land parity case {case_index}: {hand:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn packed_fetch_and_live_caverns_match_fast_oracle_lines() {
+        use crate::fast_engine::solve_keep_fast;
+        use crate::SolveKeepRequest;
+
+        let names = vec![
+            "Polluted Delta".to_string(),
+            "Ancient Tomb".to_string(),
+            "Rhystic Study".to_string(),
+            "Blank".to_string(),
+            "Underground Sea".to_string(),
+        ];
+        let deck = DeckSpec::compile(&names).expect("fetch parity deck");
+        let model = EngineOpeningModel::compile(&deck, 2).with_resource_microsteps(false);
+        let mut library = PackedLibrary::new([4].into_iter().collect());
+        library.push_known_top(3);
+        let state = PackedStateV2 {
+            hand: [0, 1, 2].into_iter().collect(),
+            library,
+            ..PackedStateV2::default()
+        };
+        let packed = ReferenceSolver::new(&model).solve(state, 16);
+        let fast = solve_keep_fast(&SolveKeepRequest {
+            hand: names[..3].to_vec(),
+            library: vec![names[3].clone(), names[4].clone()],
+            gemstone_live: false,
+            state_limit: 20_000,
+            max_turns: 2,
+            goal: "engine".to_string(),
+            engine_target_count: 1,
+            engine_success_policy: "resilient".to_string(),
+            remora_upkeep_payments: 2,
+            action_sort: true,
+            gamble_mode: None,
+            gamble_seed: None,
+            simplified_gamble: false,
+        });
+        assert_eq!(packed.value, 0.75);
+        assert_eq!(fast.turn, Some(2));
+
+        let cavern_hand = vec![
+            "Gemstone Caverns".to_string(),
+            "Ancient Tomb".to_string(),
+            "Rhystic Study".to_string(),
+            "Blank A".to_string(),
+            "Blank B".to_string(),
+            "Blank C".to_string(),
+            "Blank D".to_string(),
+        ];
+        let cavern_deck = DeckSpec::compile(&cavern_hand).expect("Caverns parity deck");
+        let cavern_model =
+            EngineOpeningModel::compile(&cavern_deck, 2).with_resource_microsteps(false);
+        let cavern_state = PackedStateV2 {
+            hand: cavern_deck.card_mask(),
+            ..PackedStateV2::default()
+        };
+        let packed_value = cavern_model
+            .pregame_states(cavern_state, true)
+            .into_iter()
+            .map(|start| ReferenceSolver::new(&cavern_model).solve(start, 16).value)
+            .fold(0.0, f64::max);
+        let fast = solve_keep_fast(&SolveKeepRequest {
+            hand: cavern_hand,
+            library: Vec::new(),
+            gemstone_live: true,
+            state_limit: 20_000,
+            max_turns: 2,
+            goal: "engine".to_string(),
+            engine_target_count: 1,
+            engine_success_policy: "resilient".to_string(),
+            remora_upkeep_payments: 2,
+            action_sort: true,
+            gamble_mode: None,
+            gamble_seed: None,
+            simplified_gamble: false,
+        });
+        assert_eq!(packed_value, 1.0);
+        assert_eq!(fast.turn, Some(1));
+    }
+
+    #[test]
+    fn artifact_opening_reachability_matches_fast_oracle() {
+        use crate::fast_engine::solve_keep_fast;
+        use crate::SolveKeepRequest;
+
+        let cases = [
+            vec!["Ancient Tomb", "Lotus Petal", "Rhystic Study"],
+            vec![
+                "Ancient Tomb",
+                "Chrome Mox",
+                "Force of Will",
+                "Rhystic Study",
+            ],
+            vec![
+                "Ancient Tomb",
+                "Mox Diamond",
+                "Command Tower",
+                "Rhystic Study",
+            ],
+            vec![
+                "Ancient Tomb",
+                "Mox Opal",
+                "Lotus Petal",
+                "Paradise Mantle",
+                "Rhystic Study",
+            ],
+            vec![
+                "City of Traitors",
+                "Mana Vault",
+                "Lotus Petal",
+                "Rhystic Study",
+            ],
+            vec!["Command Tower", "Sol Ring", "Lotus Petal", "Rhystic Study"],
+            vec!["Ancient Tomb", "Mox Opal", "Rhystic Study"],
+            vec!["Ancient Tomb", "Chrome Mox", "Sol Ring", "Rhystic Study"],
+        ];
+
+        for (case_index, cards) in cases.into_iter().enumerate() {
+            let mut hand: Vec<String> = cards.into_iter().map(str::to_string).collect();
+            while hand.len() < 7 {
+                hand.push(format!("Blank artifact {case_index} {}", hand.len()));
+            }
+            let deck = DeckSpec::compile(&hand).expect("artifact parity deck");
+            let model = EngineOpeningModel::compile(&deck, 2).with_resource_microsteps(false);
+            let state = PackedStateV2 {
+                hand: deck.card_mask(),
+                ..PackedStateV2::default()
+            };
+            let packed_hit = ReferenceSolver::new(&model).solve(state, 24).value > 0.0;
+            let fast = solve_keep_fast(&SolveKeepRequest {
+                hand: hand.clone(),
+                library: Vec::new(),
+                gemstone_live: false,
+                state_limit: 100_000,
+                max_turns: 2,
+                goal: "engine".to_string(),
+                engine_target_count: 1,
+                engine_success_policy: "resilient".to_string(),
+                remora_upkeep_payments: 2,
+                action_sort: true,
+                gamble_mode: None,
+                gamble_seed: None,
+                simplified_gamble: false,
+            });
+            assert_eq!(
+                packed_hit,
+                fast.turn.is_some(),
+                "artifact parity case {case_index}: {hand:?}"
+            );
+        }
     }
 
     #[test]
@@ -448,8 +676,8 @@ mod tests {
     struct FirstActionPolicy;
 
     impl CompiledPolicy<u8> for FirstActionPolicy {
-        fn choose(&self, _state: u8, action_count: usize) -> Option<usize> {
-            (action_count > 0).then_some(0)
+        fn choose(&self, _state: u8, transitions: &[InformationTransition<u8>]) -> Option<usize> {
+            (!transitions.is_empty()).then_some(0)
         }
     }
 

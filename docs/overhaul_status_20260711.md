@@ -12,13 +12,13 @@ The exact pre-fork baseline is commit `11104ea`, the clean snapshot used to init
 | --- | --- | --- |
 | Clean, reproducible engine fork | Complete | Keep source manifests and retained benchmark summaries current. |
 | Shared card registry | Partial | Flags, action templates, and payment gates drive production dispatch. Commander legality, tutor predicates, UI metadata, and generated semantic coverage are not yet owned by one registry. |
-| Fixed-size `PackedState` and `PackedLibrary` | Partial production | `PackedStateV2` now has canonical permanent instances, duplicate tokens, attachments, counters, and commander state. The concrete opening model uses it, but bulk production still uses `FastState`. |
-| Packed mana/payment closure | Partial production | Cost-specific plans are integrated, but paid actions are materialized back into `FastState`. Offer, sacrifice effects, Crop Rotation, Beseech, LED tutor lines, active Ragavan, Rain of Filth, City floating, and several combinations fall back to the legacy graph. |
-| Information-state reference solver | Partial production | The concrete land/engine opening slice uses explicit chance draws and weighted terminal values. Most Nick Fury card actions remain unsupported. |
-| Compiled no-lookahead policy | Kernel only | No production action or mulligan policy implements `CompiledPolicy`; bulk experiments still use the bridge evaluator. |
-| Paired `BatchEvaluator` | Missing | Slot permutations, multi-variant cohorts, influence tracking, compact discordant records, and delta-only execution remain in scripts or are absent. |
-| Multifidelity estimator | Kernel only | The accumulator is tested, but no production pipeline draws strict correction samples against fast policy results. |
-| Performance gates | Partial | Aggregate throughput and parity are retained. State/action counters, allocation totals, p50/p95/p99 latency, and 1/2/4/8/pod worker scaling are not collected by the production benchmark. |
+| Fixed-size `PackedState` and `PackedLibrary` | Partial production | `PackedStateV2` owns the exact land and principal artifact opening slice. Unsupported spell families and the bulk CLI still require migration from `FastState`. |
+| Packed mana/payment closure | Partial production | Engine, one-mana artifact, commander, and equip costs apply witnesses directly to `PackedStateV2`; City floating is retained explicitly. Rituals, sacrifice spells, Offer, Rain, and priority-sensitive LED tutor lines remain. |
+| Information-state reference solver | Partial production | Lands, principal artifacts, commander, Rhystic, and Heartwood use explicit chance draws and weighted values. Rituals, creatures, and tutors remain unsupported. |
+| Compiled no-lookahead policy | Implemented for opening slice | The action policy sees only observable transitions and the mulligan policy sees only the visible hand. It must be recalibrated after remaining card slices land. |
+| Paired `BatchEvaluator` | Kernel complete | Common-random slot permutations, resumable ranges, progress, influence, compact discordances, paired SEs, McNemar tests, and latency quantiles are implemented. The full-deck CLI adapter remains. |
+| Multifidelity estimator | Pipeline complete | Seed-only independent correction selection now connects low and high evaluators. The full-deck CLI adapter remains. |
+| Performance gates | Partial | Opening direct/micro parity, counters, latency quantiles, and throughput are present. Allocation totals and 1/2/4/8/pod worker scaling remain. |
 | Publication estimand | Incomplete | The current fixed-library solver remains an oracle/policy approximation and can receive hidden library order. It is not the visible-information estimand required by the architecture. |
 
 The practical result is a substantially better bridge engine, not a completed next-generation engine. Generations two through seven improved immutable library handling, registry dispatch, canonicalization, packed payment planning, tutors, and state deduplication while preserving a differential oracle.

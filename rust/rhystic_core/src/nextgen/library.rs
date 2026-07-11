@@ -68,6 +68,13 @@ impl PackedLibrary {
         true
     }
 
+    pub fn shuffle_all_unknown(&mut self) {
+        for index in 0..self.known_top_len() {
+            self.unknown.insert(self.known_top[index]);
+        }
+        self.known_top_len = 0;
+    }
+
     pub fn chance_draws(self) -> Vec<ChanceDraw> {
         if self.known_top_len > 0 {
             return vec![ChanceDraw {

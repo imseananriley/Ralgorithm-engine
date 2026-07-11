@@ -94,6 +94,7 @@ pub struct CardMetadata {
     pub action_templates: ActionTemplateMask,
     pub payment_gate_costs: [Option<Cost>; 2],
     pub opening_mana: OpeningManaProfile,
+    pub opening_artifact: OpeningArtifactKind,
 }
 
 impl CardMetadata {
@@ -107,6 +108,7 @@ impl CardMetadata {
             action_templates: action_templates(name, flags),
             payment_gate_costs: payment_gate_costs(name),
             opening_mana: opening_mana_profile(name),
+            opening_artifact: opening_artifact_kind(name),
         }
     }
 }
@@ -121,6 +123,7 @@ pub struct CardSpec {
     pub action_templates: ActionTemplateMask,
     pub payment_gate_costs: [Option<Cost>; 2],
     pub opening_mana: OpeningManaProfile,
+    pub opening_artifact: OpeningArtifactKind,
     pub semantic_class: u8,
 }
 
@@ -136,6 +139,7 @@ impl CardSpec {
             action_templates: metadata.action_templates,
             payment_gate_costs: metadata.payment_gate_costs,
             opening_mana: metadata.opening_mana,
+            opening_artifact: metadata.opening_artifact,
             // Classes remain exact until an equivalence proof supplies a coarser partition.
             semantic_class: slot,
         }
@@ -147,11 +151,59 @@ pub struct OpeningManaProfile {
     pub color_mask: u8,
     pub colorless: u8,
     pub enters_tapped: bool,
+    pub kind: OpeningLandKind,
+    pub land_types: u8,
+    pub fetch_types: u8,
 }
 
 impl OpeningManaProfile {
     pub const fn is_supported(self) -> bool {
-        self.color_mask != 0 || self.colorless != 0
+        !matches!(self.kind, OpeningLandKind::None)
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum OpeningLandKind {
+    #[default]
+    None = 0,
+    Simple = 1,
+    Fetch = 2,
+    CityOfTraitors = 3,
+    CrystalVein = 4,
+    Glimmervoid = 5,
+    GemstoneMine = 6,
+    GemstoneCaverns = 7,
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum OpeningArtifactKind {
+    #[default]
+    None = 0,
+    LotusPetal = 1,
+    LionsEyeDiamond = 2,
+    ChromeMox = 3,
+    MoxDiamond = 4,
+    MoxOpal = 5,
+    MoxAmber = 6,
+    ParadiseMantle = 7,
+    SolRing = 8,
+    ManaVault = 9,
+}
+
+fn opening_artifact_kind(name: &str) -> OpeningArtifactKind {
+    match name {
+        "Lotus Petal" => OpeningArtifactKind::LotusPetal,
+        "Lion's Eye Diamond" => OpeningArtifactKind::LionsEyeDiamond,
+        "Chrome Mox" => OpeningArtifactKind::ChromeMox,
+        "Mox Diamond" => OpeningArtifactKind::MoxDiamond,
+        "Mox Opal" => OpeningArtifactKind::MoxOpal,
+        "Mox Amber" => OpeningArtifactKind::MoxAmber,
+        "Paradise Mantle" => OpeningArtifactKind::ParadiseMantle,
+        "Sol Ring" => OpeningArtifactKind::SolRing,
+        "Mana Vault" => OpeningArtifactKind::ManaVault,
+        _ => OpeningArtifactKind::None,
     }
 }
 
@@ -162,20 +214,49 @@ fn opening_mana_profile(name: &str) -> OpeningManaProfile {
     const W: u8 = 1 << 3;
     const G: u8 = 1 << 4;
     const RAINBOW: u8 = B | R | U | W | G;
+    const PLAINS: u8 = 1;
+    const ISLAND: u8 = 1 << 1;
+    const SWAMP: u8 = 1 << 2;
+    const MOUNTAIN: u8 = 1 << 3;
+    const FOREST: u8 = 1 << 4;
 
-    let (color_mask, colorless, enters_tapped) = match name {
-        "Ancient Tomb" => (0, 2, false),
-        "Bayou" => (B | G, 0, false),
-        "Hallowed Fountain" | "Tundra" => (U | W, 0, false),
-        "Scrubland" => (B | W, 0, false),
-        "Tropical Island" => (U | G, 0, false),
-        "Underground Sea" => (B | U, 0, false),
-        "Volcanic Island" => (R | U, 0, false),
-        "Emergence Zone" | "Gemstone Caverns" => (0, 1, false),
-        "Sink into Stupor" => (U, 0, true),
+    let (color_mask, colorless, enters_tapped, kind, land_types, fetch_types) = match name {
+        "Ancient Tomb" => (0, 2, false, OpeningLandKind::Simple, 0, 0),
+        "Bayou" => (B | G, 0, false, OpeningLandKind::Simple, SWAMP | FOREST, 0),
+        "Hallowed Fountain" | "Tundra" => {
+            (U | W, 0, false, OpeningLandKind::Simple, PLAINS | ISLAND, 0)
+        }
+        "Scrubland" => (B | W, 0, false, OpeningLandKind::Simple, PLAINS | SWAMP, 0),
+        "Tropical Island" => (U | G, 0, false, OpeningLandKind::Simple, ISLAND | FOREST, 0),
+        "Underground Sea" => (B | U, 0, false, OpeningLandKind::Simple, ISLAND | SWAMP, 0),
+        "Volcanic Island" => (
+            R | U,
+            0,
+            false,
+            OpeningLandKind::Simple,
+            ISLAND | MOUNTAIN,
+            0,
+        ),
+        "Emergence Zone" => (0, 1, false, OpeningLandKind::Simple, 0, 0),
+        "Gemstone Caverns" => (0, 1, false, OpeningLandKind::GemstoneCaverns, 0, 0),
+        "City of Traitors" => (0, 2, false, OpeningLandKind::CityOfTraitors, 0, 0),
+        "Crystal Vein" => (0, 1, false, OpeningLandKind::CrystalVein, 0, 0),
+        "Glimmervoid" => (RAINBOW, 0, false, OpeningLandKind::Glimmervoid, 0, 0),
+        "Gemstone Mine" => (RAINBOW, 0, false, OpeningLandKind::GemstoneMine, 0, 0),
+        "Sink into Stupor" => (U, 0, true, OpeningLandKind::Simple, 0, 0),
+        "Arid Mesa" => (0, 0, false, OpeningLandKind::Fetch, 0, PLAINS | MOUNTAIN),
+        "Bloodstained Mire" => (0, 0, false, OpeningLandKind::Fetch, 0, SWAMP | MOUNTAIN),
+        "Flooded Strand" => (0, 0, false, OpeningLandKind::Fetch, 0, PLAINS | ISLAND),
+        "Marsh Flats" => (0, 0, false, OpeningLandKind::Fetch, 0, PLAINS | SWAMP),
+        "Misty Rainforest" => (0, 0, false, OpeningLandKind::Fetch, 0, ISLAND | FOREST),
+        "Polluted Delta" => (0, 0, false, OpeningLandKind::Fetch, 0, ISLAND | SWAMP),
+        "Scalding Tarn" => (0, 0, false, OpeningLandKind::Fetch, 0, ISLAND | MOUNTAIN),
+        "Verdant Catacombs" => (0, 0, false, OpeningLandKind::Fetch, 0, SWAMP | FOREST),
+        "Windswept Heath" => (0, 0, false, OpeningLandKind::Fetch, 0, PLAINS | FOREST),
+        "Wooded Foothills" => (0, 0, false, OpeningLandKind::Fetch, 0, MOUNTAIN | FOREST),
         "City of Brass" | "Command Tower" | "Exotic Orchard" | "Forbidden Orchard"
-        | "Gemstone Mine" | "Mana Confluence" | "Starting Town" | "Tarnished Citadel" => {
-            (RAINBOW, 0, false)
+        | "Mana Confluence" | "Starting Town" | "Tarnished Citadel" => {
+            (RAINBOW, 0, false, OpeningLandKind::Simple, 0, 0)
         }
         _ => return OpeningManaProfile::default(),
     };
@@ -183,6 +264,9 @@ fn opening_mana_profile(name: &str) -> OpeningManaProfile {
         color_mask,
         colorless,
         enters_tapped,
+        kind,
+        land_types,
+        fetch_types,
     }
 }
 
