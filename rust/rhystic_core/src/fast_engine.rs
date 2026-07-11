@@ -5018,18 +5018,43 @@ pub struct SolveKeepTraceFastResponse {
     pub trace_path: Vec<String>,
 }
 
+struct FastStateIndex {
+    buckets: FxHashMap<u64, SmallVec<[usize; 1]>>,
+}
+
+impl FastStateIndex {
+    fn from_states(states: &[FastState]) -> Self {
+        let mut buckets: FxHashMap<u64, SmallVec<[usize; 1]>> = FxHashMap::default();
+        buckets.reserve(states.len());
+        for (index, state) in states.iter().enumerate() {
+            buckets.entry(hash_value(state)).or_default().push(index);
+        }
+        Self { buckets }
+    }
+
+    fn contains(&self, states: &[FastState], state: &FastState, digest: u64) -> bool {
+        self.buckets
+            .get(&digest)
+            .is_some_and(|indices| indices.iter().any(|index| states[*index] == *state))
+    }
+
+    fn insert(&mut self, digest: u64, index: usize) {
+        self.buckets.entry(digest).or_default().push(index);
+    }
+}
+
 fn close_turn_fast_inner(
     ctx: &mut FastContext,
     request: &CloseTurnRequest,
     start_states: Vec<FastState>,
     config: &FastSearchConfig,
 ) -> FastCloseTurnResult {
-    let mut queue: VecDeque<FastState> = start_states.iter().cloned().collect();
-    let mut seen_set: FxHashSet<FastState> = start_states.iter().cloned().collect();
+    let mut queue = start_states.clone();
+    let mut seen_index = FastStateIndex::from_states(&start_states);
     let mut seen_order = start_states;
     let mut best_mana: FxHashMap<FastState, Vec<Mana>> = FxHashMap::default();
     let mut hit_limit = false;
-    while let Some(state) = queue.pop_back() {
+    while let Some(state) = queue.pop() {
         if let Some(label) = success_label_fast(ctx, request, &state) {
             return FastCloseTurnResult {
                 closed: seen_order,
@@ -5052,18 +5077,20 @@ fn close_turn_fast_inner(
         }
         for action in actions {
             let next_state = action.next_state;
-            if seen_set.contains(&next_state)
-                || mana_dominated_fast(ctx, request, &next_state, &mut best_mana)
-            {
+            let state_digest = hash_value(&next_state);
+            if seen_index.contains(&seen_order, &next_state, state_digest) {
+                continue;
+            }
+            if mana_dominated_fast(ctx, request, &next_state, &mut best_mana) {
                 continue;
             }
             if seen_order.len() >= request.state_limit {
                 hit_limit = true;
                 continue;
             }
-            seen_set.insert(next_state.clone());
+            seen_index.insert(state_digest, seen_order.len());
             seen_order.push(next_state.clone());
-            queue.push_back(next_state);
+            queue.push(next_state);
         }
     }
     FastCloseTurnResult {
@@ -9874,11 +9901,16 @@ fn mana_dominated_fast(
     state: &FastState,
     best_mana: &mut FxHashMap<FastState, Vec<Mana>>,
 ) -> bool {
+    use std::collections::hash_map::Entry;
+
     let key = state.structural_key(ctx, request.max_turns);
     let state_mana = state.mana();
-    let Some(existing) = best_mana.get_mut(&key) else {
-        best_mana.insert(key, vec![state_mana]);
-        return false;
+    let existing = match best_mana.entry(key) {
+        Entry::Occupied(entry) => entry.into_mut(),
+        Entry::Vacant(entry) => {
+            entry.insert(vec![state_mana]);
+            return false;
+        }
     };
     if existing.iter().any(|mana| {
         mana.iter()
@@ -10298,6 +10330,21 @@ mod tests {
         assert!(clone.contains_card(300));
         assert_eq!(&*library, &[1, 2, 3, 4, 300]);
         assert_eq!(&*clone, &[2, 3, 4, 300]);
+    }
+
+    #[test]
+    fn state_fingerprint_index_checks_equality_within_hash_bucket() {
+        let mut context = FastContext::with_card_names(["Rhystic Study"]);
+        let first = FastState::from_fixture(&mut context, &fixture_state(Vec::new()));
+        let mut second_fixture = fixture_state(Vec::new());
+        second_fixture.hand.push("Rhystic Study".to_string());
+        let second = FastState::from_fixture(&mut context, &second_fixture);
+        let states = vec![first.clone()];
+        let index = FastStateIndex::from_states(&states);
+        let first_digest = hash_value(&first);
+
+        assert!(index.contains(&states, &first, first_digest));
+        assert!(!index.contains(&states, &second, first_digest));
     }
 
     #[test]
