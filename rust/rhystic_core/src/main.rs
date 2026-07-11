@@ -14,7 +14,7 @@ use rhystic_core::{
     },
     fnv1a_seed, generate_fixture_action_cores, generate_fixture_actions, mana_bench_cases,
     mana_checksum,
-    nextgen::bench_nextgen,
+    nextgen::{bench_nextgen, bench_opening_model, bench_packed_state_v2},
     pay_options, solve_keep, verify_action_fixtures, CloseTurnRequest, Cost, EarliestRequest,
     FixtureState, Mana, PolicyEvalFastRequest, PolicySimFastRequest,
     PolicyThresholdSweepFastRequest, RawDeltaFastRequest, RngShuffleAuditRequest, SolveKeepRequest,
@@ -31,7 +31,7 @@ fn parse_u8_arg(args: &[String], index: usize, name: &str) -> u8 {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("usage: rhystic-core-smoke <seed|bottom-count|pay-count|bench-mana|bench-nextgen|bench-fast-state|bench-fast-actions|verify-actions|expand-actions-jsonl|expand-actions-fast-jsonl|close-turn-jsonl|close-turn-fast-jsonl|solve-keep-jsonl|solve-keep-fast-jsonl|solve-keep-trace-fast-jsonl|solve-keep-fast-batch-jsonl|earliest-fast-jsonl|visible-hand-fast-batch-jsonl|policy-eval-fast-jsonl|policy-threshold-sweep-fast-jsonl|policy-sim-fast-jsonl|raw-delta-fast-jsonl|raw-delta-fast-stream-jsonl|rng-shuffle-audit-jsonl> [args...]");
+        eprintln!("usage: rhystic-core-smoke <seed|bottom-count|pay-count|bench-mana|bench-nextgen|bench-state-v2|bench-opening-model|bench-fast-state|bench-fast-actions|verify-actions|expand-actions-jsonl|expand-actions-fast-jsonl|close-turn-jsonl|close-turn-fast-jsonl|solve-keep-jsonl|solve-keep-fast-jsonl|solve-keep-trace-fast-jsonl|solve-keep-fast-batch-jsonl|earliest-fast-jsonl|visible-hand-fast-batch-jsonl|policy-eval-fast-jsonl|policy-threshold-sweep-fast-jsonl|policy-sim-fast-jsonl|raw-delta-fast-jsonl|raw-delta-fast-stream-jsonl|rng-shuffle-audit-jsonl> [args...]");
         std::process::exit(2);
     }
     match args[1].as_str() {
@@ -107,6 +107,28 @@ fn main() {
                 .map(|value| value.parse().expect("iterations must be an integer"))
                 .unwrap_or(100_000);
             let report = bench_nextgen(iterations);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).expect("report JSON")
+            );
+        }
+        "bench-state-v2" => {
+            let iterations: u64 = args
+                .get(2)
+                .map(|value| value.parse().expect("iterations must be an integer"))
+                .unwrap_or(50_000_000);
+            let report = bench_packed_state_v2(iterations);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).expect("report JSON")
+            );
+        }
+        "bench-opening-model" => {
+            let iterations: u64 = args
+                .get(2)
+                .map(|value| value.parse().expect("iterations must be an integer"))
+                .unwrap_or(10_000);
+            let report = bench_opening_model(iterations);
             println!(
                 "{}",
                 serde_json::to_string_pretty(&report).expect("report JSON")

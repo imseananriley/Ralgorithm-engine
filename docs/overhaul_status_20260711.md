@@ -12,9 +12,9 @@ The exact pre-fork baseline is commit `11104ea`, the clean snapshot used to init
 | --- | --- | --- |
 | Clean, reproducible engine fork | Complete | Keep source manifests and retained benchmark summaries current. |
 | Shared card registry | Partial | Flags, action templates, and payment gates drive production dispatch. Commander legality, tutor predicates, UI metadata, and generated semantic coverage are not yet owned by one registry. |
-| Fixed-size `PackedState` and `PackedLibrary` | Kernel only | Production still uses `FastState` and an ordered fixed library. Packed state needs permanent instances, tokens, attachments, counters, and battlefield-derived abilities. |
+| Fixed-size `PackedState` and `PackedLibrary` | Partial production | `PackedStateV2` now has canonical permanent instances, duplicate tokens, attachments, counters, and commander state. The concrete opening model uses it, but bulk production still uses `FastState`. |
 | Packed mana/payment closure | Partial production | Cost-specific plans are integrated, but paid actions are materialized back into `FastState`. Offer, sacrifice effects, Crop Rotation, Beseech, LED tutor lines, active Ragavan, Rain of Filth, City floating, and several combinations fall back to the legacy graph. |
-| Information-state reference solver | Kernel only | No concrete Nick Fury `InformationModel` generates the complete card-action space. |
+| Information-state reference solver | Partial production | The concrete land/engine opening slice uses explicit chance draws and weighted terminal values. Most Nick Fury card actions remain unsupported. |
 | Compiled no-lookahead policy | Kernel only | No production action or mulligan policy implements `CompiledPolicy`; bulk experiments still use the bridge evaluator. |
 | Paired `BatchEvaluator` | Missing | Slot permutations, multi-variant cohorts, influence tracking, compact discordant records, and delta-only execution remain in scripts or are absent. |
 | Multifidelity estimator | Kernel only | The accumulator is tested, but no production pipeline draws strict correction samples against fast policy results. |

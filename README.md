@@ -7,8 +7,8 @@ This repository is a clean fork of the active simulator implementation. Historic
 ## Engine Layers
 
 1. `fast_engine`: the fixed-library Rust solver used as a parity oracle and production bridge during migration. Libraries use shared immutable storage, cached hashes, cached membership indexes, and cached structural-key canonicalization. Registry-compiled action masks skip strategic generators that cannot apply to the current hand.
-2. `nextgen`: fixed-size information state, immutable card registry, resource planning, explicit-chance reference search, and compiled-policy evaluation primitives.
-3. Production integration: card classification and strategic dispatch read from the registry. `RALGORITHM_PAYMENT_DIRECTED=packed` enables the generation-five cost-specific planner; `generic` retains the generation-four closure oracle. Full production search over the fixed-size `nextgen` state remains the next migration stage.
+2. `nextgen`: fixed-size information state, canonical permanent instances, immutable card registry, resource planning, explicit-chance reference search, and compiled-policy evaluation primitives.
+3. Production integration: card classification and strategic dispatch read from the registry. `PackedStateV2` and `EngineOpeningModel` now provide the first concrete visible-information land/engine slice. Bulk experiments still use `fast_engine`; `RALGORITHM_PAYMENT_DIRECTED=packed` enables its cost-specific planner.
 
 The reference solver and production policy intentionally have different jobs. The reference solver supplies strict labels and correction samples; the production policy supplies throughput.
 
@@ -30,4 +30,4 @@ python3 scripts/source_manifest.py --out benchmarks/source_manifest.json
 
 Run configurations must record the manifest digest, deck digest, root seed, policy version, objective weights, and state-cap behavior.
 
-The current generation comparison is documented in [docs/generation7_benchmark.md](docs/generation7_benchmark.md). The cumulative pre-fork benchmark and remaining overhaul work are documented in [docs/overhaul_status_20260711.md](docs/overhaul_status_20260711.md).
+The current migration slice is documented in [docs/generation8_packed_information_slice.md](docs/generation8_packed_information_slice.md). The cumulative pre-fork benchmark and remaining overhaul work are documented in [docs/overhaul_status_20260711.md](docs/overhaul_status_20260711.md).

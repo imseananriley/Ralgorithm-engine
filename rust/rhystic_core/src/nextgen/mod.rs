@@ -7,14 +7,22 @@ mod library;
 mod mana_closure;
 mod metrics;
 mod multifidelity;
+mod opening_model;
 mod policy;
 mod reference_solver;
 mod resource_transition;
 mod state;
+mod state_v2;
 
-pub use benchmark::{bench_nextgen, NextgenBenchReport};
+pub use benchmark::{
+    bench_nextgen, bench_opening_model, bench_packed_state_v2, NextgenBenchReport,
+    OpeningModelBenchReport, PackedStateV2BenchReport,
+};
 pub use card_mask::{CardMask, SlotId, MAX_DECK_SLOTS};
-pub use card_spec::{ActionClass, ActionTemplateMask, CardFlags, CardMetadata, CardSpec, DeckSpec};
+pub use card_spec::{
+    ActionClass, ActionTemplateMask, CardFlags, CardMetadata, CardSpec, DeckSpec,
+    OpeningManaProfile,
+};
 pub use library::{ChanceDraw, ClassChanceDraw, PackedLibrary, KNOWN_TOP_CAPACITY};
 pub use mana_closure::{
     compute_mana_closure, compute_payment_plans, ManaOption, ManaOutcome, ManaPool, ManaSource,
@@ -22,12 +30,17 @@ pub use mana_closure::{
 };
 pub use metrics::SearchMetrics;
 pub use multifidelity::{Estimate, MultiFidelityAccumulator};
+pub use opening_model::EngineOpeningModel;
 pub use policy::{evaluate_compiled_policy, CompiledPolicy, PolicyResult};
 pub use reference_solver::{
     InformationModel, InformationTransition, ReferenceResult, ReferenceSolver,
 };
 pub use resource_transition::apply_payment_plan;
 pub use state::{PackedState, Zone};
+pub use state_v2::{
+    CommanderState, CommanderZone, PackedStateV2, PermanentInstance, PermanentSet, PermanentSource,
+    TokenKind, MAX_BATTLEFIELD_PERMANENTS, NO_ATTACHMENT,
+};
 
 #[cfg(test)]
 mod tests {
@@ -111,6 +124,133 @@ mod tests {
         assert!(size_of::<PackedLibrary>() <= 32);
         assert!(size_of::<PackedState>() <= 160);
         assert!(PackedState::default().all_zones_disjoint());
+    }
+
+    #[test]
+    fn packed_state_v2_is_canonical_and_supports_duplicate_tokens() {
+        let card = PermanentInstance::new(PermanentSource::card(4))
+            .with_counters(2)
+            .with_tapped(true);
+        let treasure = PermanentInstance::new(PermanentSource::token(TokenKind::Treasure));
+        let mut left = PackedStateV2::default();
+        left.hand.insert(4);
+        assert!(left.move_card_to_battlefield(4, Zone::Hand, card));
+        assert!(left.add_token(TokenKind::Treasure));
+        assert!(left.add_token(TokenKind::Treasure));
+
+        let mut right = PackedStateV2::default();
+        assert!(right.add_token(TokenKind::Treasure));
+        right.hand.insert(4);
+        assert!(right.move_card_to_battlefield(4, Zone::Hand, card));
+        assert!(right.battlefield.insert(treasure));
+
+        assert_eq!(left, right);
+        assert_eq!(left.battlefield.len(), 3);
+        assert!(left.is_valid());
+    }
+
+    #[test]
+    fn packed_state_v2_tracks_commander_attachments_and_zone_disjointness() {
+        let mut state = PackedStateV2::default();
+        state.hand.insert(7);
+        assert!(state.put_commander_on_battlefield(false, true));
+        let mantle = PermanentInstance::new(PermanentSource::card(7))
+            .with_attachment(PermanentSource::commander());
+        assert!(state.move_card_to_battlefield(7, Zone::Hand, mantle));
+        assert!(state.is_valid());
+
+        assert!(state.return_commander_to_command_zone());
+        assert_eq!(state.commander.zone, CommanderZone::Command);
+        assert!(state.battlefield.as_slice()[0].attached_to().is_none());
+        assert!(state.move_card_from_battlefield(7, Zone::Graveyard));
+        assert!(state.graveyard.contains(7));
+        assert!(state.is_valid());
+    }
+
+    #[test]
+    fn packed_state_v2_stays_fixed_and_bounded() {
+        assert!(size_of::<PermanentInstance>() <= 4);
+        assert!(size_of::<PermanentSet>() <= 68);
+        assert!(size_of::<PackedStateV2>() <= 176);
+        let mut state = PackedStateV2::default();
+        for _ in 0..MAX_BATTLEFIELD_PERMANENTS {
+            assert!(state.add_token(TokenKind::Treasure));
+        }
+        assert!(!state.add_token(TokenKind::Treasure));
+        assert!(state.is_valid());
+    }
+
+    #[test]
+    fn opening_model_finds_deterministic_turn_two_rhystic() {
+        let deck = DeckSpec::compile(&[
+            "Command Tower".to_string(),
+            "Ancient Tomb".to_string(),
+            "Rhystic Study".to_string(),
+            "Blank".to_string(),
+        ])
+        .expect("opening model deck");
+        let model = EngineOpeningModel::compile(&deck, 2);
+        let mut state = PackedStateV2::default();
+        state.hand = [0, 1, 2].into_iter().collect();
+
+        let result = ReferenceSolver::new(&model).solve(state, 12);
+        assert_eq!(result.value, 0.75);
+        assert!(result.metrics.states_expanded > 0);
+    }
+
+    #[test]
+    fn opening_model_averages_unknown_draws_without_looking_ahead() {
+        let deck = DeckSpec::compile(&[
+            "Ancient Tomb".to_string(),
+            "Command Tower".to_string(),
+            "Rhystic Study".to_string(),
+            "Blank".to_string(),
+            "Blank 2".to_string(),
+        ])
+        .expect("opening model deck");
+        let model = EngineOpeningModel::compile(&deck, 2);
+        let mut state = PackedStateV2 {
+            library: PackedLibrary::new([1, 3, 4].into_iter().collect()),
+            ..PackedStateV2::default()
+        };
+        state.hand = [0, 2].into_iter().collect();
+
+        let result = ReferenceSolver::new(&model).solve(state, 12);
+        assert!((result.value - 0.5).abs() < 1e-12);
+        assert!(result.metrics.chance_nodes > 0);
+    }
+
+    #[test]
+    fn opening_model_reports_unsupported_cards_as_inert() {
+        let deck = DeckSpec::compile(&[
+            "Command Tower".to_string(),
+            "Rhystic Study".to_string(),
+            "Polluted Delta".to_string(),
+            "Chrome Mox".to_string(),
+        ])
+        .expect("opening model deck");
+        let model = EngineOpeningModel::compile(&deck, 2);
+
+        assert_eq!(model.supported_slots().len(), 2);
+        assert_eq!(model.unsupported_slots().len(), 2);
+    }
+
+    #[test]
+    fn opening_mana_profiles_are_compiled_by_the_shared_registry() {
+        let deck = DeckSpec::compile(&[
+            "Command Tower".to_string(),
+            "Gemstone Caverns".to_string(),
+            "Sink into Stupor".to_string(),
+            "City of Traitors".to_string(),
+            "Glimmervoid".to_string(),
+        ])
+        .expect("opening mana registry");
+
+        assert_eq!(deck.card(0).opening_mana.color_mask, 0b1_1111);
+        assert_eq!(deck.card(1).opening_mana.colorless, 1);
+        assert!(deck.card(2).opening_mana.enters_tapped);
+        assert!(!deck.card(3).opening_mana.is_supported());
+        assert!(!deck.card(4).opening_mana.is_supported());
     }
 
     #[test]

@@ -93,6 +93,7 @@ pub struct CardMetadata {
     pub action_class: ActionClass,
     pub action_templates: ActionTemplateMask,
     pub payment_gate_costs: [Option<Cost>; 2],
+    pub opening_mana: OpeningManaProfile,
 }
 
 impl CardMetadata {
@@ -105,6 +106,7 @@ impl CardMetadata {
             action_class: action_class(flags),
             action_templates: action_templates(name, flags),
             payment_gate_costs: payment_gate_costs(name),
+            opening_mana: opening_mana_profile(name),
         }
     }
 }
@@ -118,6 +120,7 @@ pub struct CardSpec {
     pub action_class: ActionClass,
     pub action_templates: ActionTemplateMask,
     pub payment_gate_costs: [Option<Cost>; 2],
+    pub opening_mana: OpeningManaProfile,
     pub semantic_class: u8,
 }
 
@@ -132,9 +135,54 @@ impl CardSpec {
             action_class: metadata.action_class,
             action_templates: metadata.action_templates,
             payment_gate_costs: metadata.payment_gate_costs,
+            opening_mana: metadata.opening_mana,
             // Classes remain exact until an equivalence proof supplies a coarser partition.
             semantic_class: slot,
         }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct OpeningManaProfile {
+    pub color_mask: u8,
+    pub colorless: u8,
+    pub enters_tapped: bool,
+}
+
+impl OpeningManaProfile {
+    pub const fn is_supported(self) -> bool {
+        self.color_mask != 0 || self.colorless != 0
+    }
+}
+
+fn opening_mana_profile(name: &str) -> OpeningManaProfile {
+    const B: u8 = 1;
+    const R: u8 = 1 << 1;
+    const U: u8 = 1 << 2;
+    const W: u8 = 1 << 3;
+    const G: u8 = 1 << 4;
+    const RAINBOW: u8 = B | R | U | W | G;
+
+    let (color_mask, colorless, enters_tapped) = match name {
+        "Ancient Tomb" => (0, 2, false),
+        "Bayou" => (B | G, 0, false),
+        "Hallowed Fountain" | "Tundra" => (U | W, 0, false),
+        "Scrubland" => (B | W, 0, false),
+        "Tropical Island" => (U | G, 0, false),
+        "Underground Sea" => (B | U, 0, false),
+        "Volcanic Island" => (R | U, 0, false),
+        "Emergence Zone" | "Gemstone Caverns" => (0, 1, false),
+        "Sink into Stupor" => (U, 0, true),
+        "City of Brass" | "Command Tower" | "Exotic Orchard" | "Forbidden Orchard"
+        | "Gemstone Mine" | "Mana Confluence" | "Starting Town" | "Tarnished Citadel" => {
+            (RAINBOW, 0, false)
+        }
+        _ => return OpeningManaProfile::default(),
+    };
+    OpeningManaProfile {
+        color_mask,
+        colorless,
+        enters_tapped,
     }
 }
 
