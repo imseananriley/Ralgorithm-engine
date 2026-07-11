@@ -3,13 +3,16 @@ use smallvec::SmallVec;
 use super::{
     compute_payment_plans, CardFlags, CardMask, CommanderZone, CompiledPolicy, DeckSpec,
     InformationModel, InformationTransition, ManaOption, ManaPool, ManaSource, OpeningArtifactKind,
-    OpeningLandKind, OpeningManaProfile, PackedStateV2, PermanentInstance, PermanentSource,
-    ResourceUse, SlotId, TokenKind, Zone,
+    OpeningLandKind, OpeningManaProfile, OpeningSpellKind, PackedStateV2, PermanentInstance,
+    PermanentSource, ResourceUse, SlotId, TokenKind, Zone,
 };
 use crate::{pay_options, Cost};
 
 const LAND_PLAYED: u32 = 1;
 const TURN_DRAW_DONE: u32 = 1 << 1;
+const PRETURN_WINDOW: u32 = 1 << 2;
+const PACT_DUE: u32 = 1 << 3;
+const RAIN_ACTIVE: u32 = 1 << 4;
 
 #[derive(Debug, Clone)]
 struct LandSemantics {
@@ -22,6 +25,7 @@ enum OpeningCard {
     Inert,
     Land(LandSemantics),
     Artifact(OpeningArtifactKind),
+    Spell(OpeningSpellKind),
     Engine { cost: Cost, values: [f64; 2] },
 }
 
@@ -91,6 +95,9 @@ impl EngineOpeningModel {
                 }
                 _ if !matches!(card.opening_artifact, OpeningArtifactKind::None) => {
                     OpeningCard::Artifact(card.opening_artifact)
+                }
+                _ if !matches!(card.opening_spell, OpeningSpellKind::None) => {
+                    OpeningCard::Spell(card.opening_spell)
                 }
                 _ => OpeningCard::Inert,
             };
@@ -162,6 +169,7 @@ impl EngineOpeningModel {
             {
                 continue;
             }
+            next.flags |= PRETURN_WINDOW;
             states.push(next);
         }
         states
@@ -194,9 +202,16 @@ impl EngineOpeningModel {
         }
     }
 
+    fn spell_kind(&self, slot: SlotId) -> Option<OpeningSpellKind> {
+        match self.card(slot) {
+            Some(OpeningCard::Spell(kind)) => Some(*kind),
+            _ => None,
+        }
+    }
+
     fn engine_value(&self, state: PackedStateV2) -> Option<f64> {
         let turn_index = usize::from(Self::turn(state).saturating_sub(1)).min(1);
-        state
+        let value = state
             .battlefield
             .as_slice()
             .iter()
@@ -206,7 +221,12 @@ impl EngineOpeningModel {
                 Some(OpeningCard::Engine { values, .. }) => Some(values[turn_index]),
                 _ => None,
             })
-            .reduce(f64::max)
+            .reduce(f64::max);
+        if value.is_some() && state.flags & PACT_DUE != 0 && !self.can_pay_pact_next_upkeep(state) {
+            None
+        } else {
+            value
+        }
     }
 
     fn visible_policy_score(&self, state: PackedStateV2) -> i64 {
@@ -252,7 +272,8 @@ impl EngineOpeningModel {
                         OpeningArtifactKind::MoxOpal
                         | OpeningArtifactKind::MoxAmber
                         | OpeningArtifactKind::SolRing
-                        | OpeningArtifactKind::ManaVault => 100,
+                        | OpeningArtifactKind::ManaVault
+                        | OpeningArtifactKind::WishclawTalisman => 100,
                         OpeningArtifactKind::LionsEyeDiamond
                         | OpeningArtifactKind::ParadiseMantle => 60,
                         OpeningArtifactKind::None => 0,
@@ -285,9 +306,32 @@ impl EngineOpeningModel {
                     OpeningArtifactKind::SolRing
                     | OpeningArtifactKind::ManaVault
                     | OpeningArtifactKind::MoxOpal
-                    | OpeningArtifactKind::MoxAmber => 2,
+                    | OpeningArtifactKind::MoxAmber
+                    | OpeningArtifactKind::WishclawTalisman => 2,
                     OpeningArtifactKind::LionsEyeDiamond | OpeningArtifactKind::ParadiseMantle => 1,
                     OpeningArtifactKind::None => 0,
+                },
+                Some(OpeningCard::Spell(kind)) => match kind {
+                    OpeningSpellKind::DemonicTutor
+                    | OpeningSpellKind::ImperialSeal
+                    | OpeningSpellKind::VampiricTutor
+                    | OpeningSpellKind::EnlightenedTutor
+                    | OpeningSpellKind::SchemingSymmetry => 3,
+                    OpeningSpellKind::DarkRitual
+                    | OpeningSpellKind::ElvishSpiritGuide
+                    | OpeningSpellKind::SimianSpiritGuide
+                    | OpeningSpellKind::RiteOfFlame
+                    | OpeningSpellKind::Manamorphose
+                    | OpeningSpellKind::Gamble
+                    | OpeningSpellKind::NoxiousRevival
+                    | OpeningSpellKind::GreenSunsZenith
+                    | OpeningSpellKind::SummonersPact
+                    | OpeningSpellKind::CropRotation
+                    | OpeningSpellKind::CullingTheWeak
+                    | OpeningSpellKind::DiabolicIntent
+                    | OpeningSpellKind::InfernalPlunge
+                    | OpeningSpellKind::RainOfFilth => 2,
+                    OpeningSpellKind::None => 0,
                 },
                 _ => 0,
             };
@@ -316,6 +360,7 @@ impl EngineOpeningModel {
             Some(OpeningCard::Artifact(OpeningArtifactKind::LionsEyeDiamond)) => 2,
             Some(OpeningCard::Land(_)) => 3,
             Some(OpeningCard::Artifact(_)) => 4,
+            Some(OpeningCard::Spell(_)) => 5,
             Some(OpeningCard::Engine { .. }) => 6,
         }
     }
@@ -474,10 +519,13 @@ impl EngineOpeningModel {
         state.battlefield.as_slice().iter().any(|permanent| {
             permanent.source().token_kind().is_some_and(|kind| {
                 matches!(kind, TokenKind::Treasure | TokenKind::GenericArtifact)
-            }) || permanent
-                .source()
-                .card_slot()
-                .is_some_and(|slot| self.artifact_slots.contains(slot))
+            }) || permanent.source().card_slot().is_some_and(|slot| {
+                self.artifact_slots.contains(slot)
+                    && !(matches!(
+                        self.artifact_kind(slot),
+                        Some(OpeningArtifactKind::WishclawTalisman)
+                    ) && permanent.counters() == 0)
+            })
         })
     }
 
@@ -489,10 +537,13 @@ impl EngineOpeningModel {
             .filter(|permanent| {
                 permanent.source().token_kind().is_some_and(|kind| {
                     matches!(kind, TokenKind::Treasure | TokenKind::GenericArtifact)
-                }) || permanent
-                    .source()
-                    .card_slot()
-                    .is_some_and(|slot| self.artifact_slots.contains(slot))
+                }) || permanent.source().card_slot().is_some_and(|slot| {
+                    self.artifact_slots.contains(slot)
+                        && !(matches!(
+                            self.artifact_kind(slot),
+                            Some(OpeningArtifactKind::WishclawTalisman)
+                        ) && permanent.counters() == 0)
+                })
             })
             .count()
     }
@@ -544,6 +595,24 @@ impl EngineOpeningModel {
                         if next.move_card(imprint, Zone::Hand, Zone::Exile)
                             && next.move_card_to_battlefield(slot, Zone::Hand, permanent)
                         {
+                            out.push(InformationTransition::Deterministic(next));
+                        }
+                    }
+                }
+                OpeningArtifactKind::WishclawTalisman => {
+                    for plan in compute_payment_plans(
+                        state.mana,
+                        &self.payment_sources(state),
+                        [1, 1, 0, 0, 0, 0],
+                    ) {
+                        let Some(mut next) = self.apply_payment_plan(state, plan) else {
+                            continue;
+                        };
+                        if next.move_card_to_battlefield(
+                            slot,
+                            Zone::Hand,
+                            PermanentInstance::new(PermanentSource::card(slot)).with_counters(3),
+                        ) {
                             out.push(InformationTransition::Deterministic(next));
                         }
                     }
@@ -868,6 +937,27 @@ impl EngineOpeningModel {
                         ResourceUse::Sacrifice,
                     ));
                 }
+                if state.flags & RAIN_ACTIVE != 0 {
+                    let tap_options: SmallVec<[ManaOption; 5]> = options
+                        .iter()
+                        .copied()
+                        .filter(|option| matches!(option.resource_use, ResourceUse::Tap))
+                        .collect();
+                    options.push(ManaOption::new(
+                        ManaPool([1, 0, 0, 0, 0, 0]),
+                        ResourceUse::Sacrifice,
+                    ));
+                    if !matches!(land.profile.kind, OpeningLandKind::GemstoneMine)
+                        || permanent.counters() > 1
+                    {
+                        for option in tap_options {
+                            options.push(ManaOption::new(
+                                option.mana.add_capped(ManaPool([1, 0, 0, 0, 0, 0]), 15),
+                                ResourceUse::Sacrifice,
+                            ));
+                        }
+                    }
+                }
                 sources.push(ManaSource::with_options(slot, options));
                 continue;
             }
@@ -905,6 +995,19 @@ impl EngineOpeningModel {
                 mana.into_iter()
                     .map(|produced| ManaOption::new(produced, resource_use)),
             ));
+        }
+        for slot in state.hand.iter() {
+            let produced = match self.spell_kind(slot) {
+                Some(OpeningSpellKind::ElvishSpiritGuide) => Some(ManaPool([0, 0, 0, 0, 1, 0])),
+                Some(OpeningSpellKind::SimianSpiritGuide) => Some(ManaPool([0, 1, 0, 0, 0, 0])),
+                _ => None,
+            };
+            if let Some(mana) = produced {
+                sources.push(ManaSource::with_options(
+                    slot,
+                    [ManaOption::new(mana, ResourceUse::Exile)],
+                ));
+            }
         }
         sources
     }
@@ -973,6 +1076,557 @@ impl EngineOpeningModel {
         }
     }
 
+    fn generate_rituals(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        for slot in state.hand.iter() {
+            let (cost, produced) = match self.spell_kind(slot) {
+                Some(OpeningSpellKind::DarkRitual) => {
+                    ([0, 1, 0, 0, 0, 0], ManaPool([3, 0, 0, 0, 0, 0]))
+                }
+                Some(OpeningSpellKind::RiteOfFlame) => {
+                    ([0, 0, 1, 0, 0, 0], ManaPool([0, 2, 0, 0, 0, 0]))
+                }
+                _ => continue,
+            };
+            if state.flags & PRETURN_WINDOW != 0
+                && !matches!(self.spell_kind(slot), Some(OpeningSpellKind::DarkRitual))
+            {
+                continue;
+            }
+            for plan in compute_payment_plans(state.mana, &self.payment_sources(state), cost) {
+                let Some(mut next) = self.apply_payment_plan(state, plan) else {
+                    continue;
+                };
+                if next.move_card(slot, Zone::Hand, Zone::Graveyard) {
+                    next.mana = next.mana.add_capped(produced, 15);
+                    out.push(InformationTransition::Deterministic(next));
+                }
+            }
+        }
+    }
+
+    fn generate_tutors(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        for tutor in state.hand.iter() {
+            let Some(kind) = self.spell_kind(tutor) else {
+                continue;
+            };
+            if state.flags & PRETURN_WINDOW != 0
+                && !matches!(
+                    kind,
+                    OpeningSpellKind::VampiricTutor | OpeningSpellKind::EnlightenedTutor
+                )
+            {
+                continue;
+            }
+            let (cost, to_hand) = match kind {
+                OpeningSpellKind::DemonicTutor => ([1, 1, 0, 0, 0, 0], true),
+                OpeningSpellKind::ImperialSeal
+                | OpeningSpellKind::VampiricTutor
+                | OpeningSpellKind::SchemingSymmetry => ([0, 1, 0, 0, 0, 0], false),
+                OpeningSpellKind::EnlightenedTutor => ([0, 0, 0, 0, 1, 0], false),
+                _ => continue,
+            };
+            let plans = compute_payment_plans(state.mana, &self.payment_sources(state), cost);
+            for target in state.library.cards().iter() {
+                if matches!(kind, OpeningSpellKind::EnlightenedTutor)
+                    && !self.card_flags[target as usize].contains(CardFlags::ARTIFACT)
+                    && !self.card_flags[target as usize].contains(CardFlags::ENCHANTMENT)
+                {
+                    continue;
+                }
+                for plan in &plans {
+                    let Some(mut next) = self.apply_payment_plan(state, *plan) else {
+                        continue;
+                    };
+                    if !next.move_card(tutor, Zone::Hand, Zone::Graveyard)
+                        || !next.library.remove_known_or_unknown(target)
+                    {
+                        continue;
+                    }
+                    next.library.shuffle_all_unknown();
+                    if to_hand {
+                        next.hand.insert(target);
+                    } else {
+                        next.library.push_known_top(target);
+                    }
+                    out.push(InformationTransition::Deterministic(next));
+                }
+            }
+        }
+    }
+
+    fn generate_wishclaw_tutors(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        for permanent in state.battlefield.as_slice() {
+            let Some(slot) = permanent.source().card_slot() else {
+                continue;
+            };
+            if permanent.tapped()
+                || permanent.counters() == 0
+                || !matches!(
+                    self.artifact_kind(slot),
+                    Some(OpeningArtifactKind::WishclawTalisman)
+                )
+            {
+                continue;
+            }
+            let plans =
+                compute_payment_plans(state.mana, &self.payment_sources(state), [1, 0, 0, 0, 0, 0]);
+            for target in state.library.cards().iter() {
+                for plan in &plans {
+                    let Some(mut next) = self.apply_payment_plan(state, *plan) else {
+                        continue;
+                    };
+                    let Some(current) = next
+                        .battlefield
+                        .as_slice()
+                        .iter()
+                        .find(|item| item.source() == permanent.source())
+                        .copied()
+                    else {
+                        continue;
+                    };
+                    if !next.library.remove_known_or_unknown(target) {
+                        continue;
+                    }
+                    next.library.shuffle_all_unknown();
+                    next.hand.insert(target);
+                    next.battlefield
+                        .replace(current, current.with_tapped(true).with_counters(0));
+                    out.push(InformationTransition::Deterministic(next));
+                }
+            }
+        }
+    }
+
+    fn generate_manamorphose(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        for slot in state
+            .hand
+            .iter()
+            .filter(|slot| matches!(self.spell_kind(*slot), Some(OpeningSpellKind::Manamorphose)))
+        {
+            let sources = self.payment_sources(state);
+            let mut plans = compute_payment_plans(state.mana, &sources, [1, 0, 1, 0, 0, 0]);
+            plans.extend(compute_payment_plans(
+                state.mana,
+                &sources,
+                [1, 0, 0, 0, 0, 1],
+            ));
+            plans.sort_by_key(|plan| {
+                (
+                    plan.consumption.tapped.bits(),
+                    plan.consumption.sacrificed.bits(),
+                    plan.consumption.exiled.bits(),
+                    plan.leftover,
+                )
+            });
+            plans.dedup();
+            for plan in plans {
+                let Some(mut paid) = self.apply_payment_plan(state, plan) else {
+                    continue;
+                };
+                if !paid.move_card(slot, Zone::Hand, Zone::Graveyard) {
+                    continue;
+                }
+                for left_color in 0..5 {
+                    for right_color in left_color..5 {
+                        let mut next = paid;
+                        let mut produced = [0; 6];
+                        produced[left_color] += 1;
+                        produced[right_color] += 1;
+                        next.mana = next.mana.add_capped(ManaPool(produced), 15);
+                        let draws = next.library.chance_draws();
+                        if draws.is_empty() {
+                            out.push(InformationTransition::Deterministic(next));
+                            continue;
+                        }
+                        let outcomes = draws
+                            .into_iter()
+                            .filter_map(|draw| {
+                                let mut drawn = next;
+                                drawn.draw(draw.slot).then_some((
+                                    drawn,
+                                    f64::from(draw.numerator) / f64::from(draw.denominator),
+                                ))
+                            })
+                            .collect();
+                        out.push(InformationTransition::Chance(outcomes));
+                    }
+                }
+            }
+        }
+    }
+
+    fn generate_gamble(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        if state.flags & PRETURN_WINDOW != 0 {
+            return;
+        }
+        for gamble in state
+            .hand
+            .iter()
+            .filter(|slot| matches!(self.spell_kind(*slot), Some(OpeningSpellKind::Gamble)))
+        {
+            let plans =
+                compute_payment_plans(state.mana, &self.payment_sources(state), [0, 0, 1, 0, 0, 0]);
+            for target in state.library.cards().iter() {
+                for plan in &plans {
+                    let Some(mut searched) = self.apply_payment_plan(state, *plan) else {
+                        continue;
+                    };
+                    if !searched.move_card(gamble, Zone::Hand, Zone::Graveyard)
+                        || !searched.library.remove_known_or_unknown(target)
+                    {
+                        continue;
+                    }
+                    searched.library.shuffle_all_unknown();
+                    searched.hand.insert(target);
+                    let denominator = searched.hand.len() as f64;
+                    let outcomes = searched
+                        .hand
+                        .iter()
+                        .filter_map(|discard| {
+                            let mut next = searched;
+                            next.move_card(discard, Zone::Hand, Zone::Graveyard)
+                                .then_some((next, 1.0 / denominator))
+                        })
+                        .collect();
+                    out.push(InformationTransition::Chance(outcomes));
+                }
+            }
+        }
+    }
+
+    fn generate_noxious_revival(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        for noxious in state.hand.iter().filter(|slot| {
+            matches!(
+                self.spell_kind(*slot),
+                Some(OpeningSpellKind::NoxiousRevival)
+            )
+        }) {
+            for target in state.graveyard.iter() {
+                let mut next = state;
+                if !next.move_card(noxious, Zone::Hand, Zone::Graveyard)
+                    || !next.graveyard.remove(target)
+                {
+                    continue;
+                }
+                next.library.push_known_top(target);
+                out.push(InformationTransition::Deterministic(next));
+            }
+        }
+    }
+
+    fn generate_demonic_led_tutors(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        let leds: SmallVec<[SlotId; 2]> = state
+            .battlefield
+            .as_slice()
+            .iter()
+            .filter(|permanent| !permanent.tapped())
+            .filter_map(|permanent| permanent.source().card_slot())
+            .filter(|slot| {
+                matches!(
+                    self.artifact_kind(*slot),
+                    Some(OpeningArtifactKind::LionsEyeDiamond)
+                )
+            })
+            .collect();
+        if leds.is_empty() {
+            return;
+        }
+        for tutor in state
+            .hand
+            .iter()
+            .filter(|slot| matches!(self.spell_kind(*slot), Some(OpeningSpellKind::DemonicTutor)))
+        {
+            let plans =
+                compute_payment_plans(state.mana, &self.payment_sources(state), [1, 1, 0, 0, 0, 0]);
+            for led in &leds {
+                for target in state.library.cards().iter() {
+                    for plan in &plans {
+                        let Some(mut paid) = self.apply_payment_plan(state, *plan) else {
+                            continue;
+                        };
+                        if !paid.move_card(tutor, Zone::Hand, Zone::Graveyard)
+                            || !paid.move_card_from_battlefield(*led, Zone::Graveyard)
+                        {
+                            continue;
+                        }
+                        let hand: SmallVec<[SlotId; 16]> = paid.hand.iter().collect();
+                        for card in hand {
+                            paid.move_card(card, Zone::Hand, Zone::Graveyard);
+                        }
+                        for color in 0..5 {
+                            let mut next = paid;
+                            let mut produced = [0; 6];
+                            produced[color] = 3;
+                            next.mana = next.mana.add_capped(ManaPool(produced), 15);
+                            if !next.library.remove_known_or_unknown(target) {
+                                continue;
+                            }
+                            next.library.shuffle_all_unknown();
+                            next.hand.insert(target);
+                            out.push(InformationTransition::Deterministic(next));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn generate_green_engine_tutors(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        for tutor in state.hand.iter() {
+            match self.spell_kind(tutor) {
+                Some(OpeningSpellKind::GreenSunsZenith) if state.flags & PRETURN_WINDOW == 0 => {
+                    let plans = compute_payment_plans(
+                        state.mana,
+                        &self.payment_sources(state),
+                        [3, 0, 0, 0, 0, 1],
+                    );
+                    for target in state.library.cards().iter().filter(|target| {
+                        matches!(self.card(*target), Some(OpeningCard::Engine { .. }))
+                            && self.card_colors[*target as usize] & (1 << 4) != 0
+                    }) {
+                        for plan in &plans {
+                            let Some(mut next) = self.apply_payment_plan(state, *plan) else {
+                                continue;
+                            };
+                            if !next.hand.remove(tutor)
+                                || !next.library.remove_known_or_unknown(target)
+                                || !next.library.insert_unknown(tutor)
+                            {
+                                continue;
+                            }
+                            next.library.shuffle_all_unknown();
+                            if next
+                                .battlefield
+                                .insert(PermanentInstance::new(PermanentSource::card(target)))
+                            {
+                                out.push(InformationTransition::Deterministic(next));
+                            }
+                        }
+                    }
+                }
+                Some(OpeningSpellKind::SummonersPact) => {
+                    for target in state.library.cards().iter().filter(|target| {
+                        self.card_flags[*target as usize].contains(CardFlags::CREATURE)
+                            && self.card_colors[*target as usize] & (1 << 4) != 0
+                    }) {
+                        let mut next = state;
+                        if !next.move_card(tutor, Zone::Hand, Zone::Exile)
+                            || !next.library.remove_known_or_unknown(target)
+                        {
+                            continue;
+                        }
+                        next.library.shuffle_all_unknown();
+                        next.hand.insert(target);
+                        next.flags |= PACT_DUE;
+                        out.push(InformationTransition::Deterministic(next));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn can_pay_pact_next_upkeep(&self, state: PackedStateV2) -> bool {
+        let mut upkeep = state;
+        upkeep.mana = ManaPool::default();
+        let battlefield = upkeep.battlefield;
+        for permanent in battlefield.as_slice() {
+            let stays_tapped = permanent.source().card_slot().is_some_and(|slot| {
+                matches!(
+                    self.artifact_kind(slot),
+                    Some(OpeningArtifactKind::ManaVault)
+                )
+            }) && permanent.tapped();
+            upkeep.battlefield.replace(
+                *permanent,
+                permanent.with_tapped(stays_tapped).with_fresh(false),
+            );
+        }
+        !compute_payment_plans(
+            upkeep.mana,
+            &self.payment_sources(upkeep),
+            [2, 0, 0, 0, 0, 2],
+        )
+        .is_empty()
+    }
+
+    fn sacrifice_creature(&self, state: &mut PackedStateV2, source: PermanentSource) -> bool {
+        if source.is_commander() {
+            state.return_commander_to_command_zone()
+        } else if let Some(slot) = source.card_slot() {
+            self.card_flags[slot as usize].contains(CardFlags::CREATURE)
+                && state.move_card_from_battlefield(slot, Zone::Graveyard)
+        } else {
+            matches!(source.token_kind(), Some(TokenKind::GenericCreature))
+                && state.remove_token(TokenKind::GenericCreature)
+        }
+    }
+
+    fn creature_sources(&self, state: PackedStateV2) -> SmallVec<[PermanentSource; 8]> {
+        state
+            .battlefield
+            .as_slice()
+            .iter()
+            .filter_map(|permanent| {
+                let source = permanent.source();
+                (source.is_commander()
+                    || source.card_slot().is_some_and(|slot| {
+                        self.card_flags[slot as usize].contains(CardFlags::CREATURE)
+                    })
+                    || matches!(source.token_kind(), Some(TokenKind::GenericCreature)))
+                .then_some(source)
+            })
+            .collect()
+    }
+
+    fn generate_sacrifice_spells(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        for spell in state.hand.iter() {
+            let kind = self.spell_kind(spell);
+            if matches!(kind, Some(OpeningSpellKind::RainOfFilth)) {
+                for plan in compute_payment_plans(
+                    state.mana,
+                    &self.payment_sources(state),
+                    [0, 1, 0, 0, 0, 0],
+                ) {
+                    let Some(mut next) = self.apply_payment_plan(state, plan) else {
+                        continue;
+                    };
+                    if next.move_card(spell, Zone::Hand, Zone::Graveyard) {
+                        next.flags |= RAIN_ACTIVE;
+                        out.push(InformationTransition::Deterministic(next));
+                    }
+                }
+                continue;
+            }
+            let (cost, produced) = match kind {
+                Some(OpeningSpellKind::CullingTheWeak) => {
+                    ([0, 1, 0, 0, 0, 0], Some(ManaPool([4, 0, 0, 0, 0, 0])))
+                }
+                Some(OpeningSpellKind::InfernalPlunge) if state.flags & PRETURN_WINDOW == 0 => {
+                    ([0, 0, 1, 0, 0, 0], Some(ManaPool([0, 3, 0, 0, 0, 0])))
+                }
+                Some(OpeningSpellKind::DiabolicIntent) if state.flags & PRETURN_WINDOW == 0 => {
+                    ([1, 1, 0, 0, 0, 0], None)
+                }
+                _ => continue,
+            };
+            let plans = compute_payment_plans(state.mana, &self.payment_sources(state), cost);
+            for creature in self.creature_sources(state) {
+                for plan in &plans {
+                    let Some(mut paid) = self.apply_payment_plan(state, *plan) else {
+                        continue;
+                    };
+                    if !self.sacrifice_creature(&mut paid, creature)
+                        || !paid.move_card(spell, Zone::Hand, Zone::Graveyard)
+                    {
+                        continue;
+                    }
+                    if let Some(mana) = produced {
+                        paid.mana = paid.mana.add_capped(mana, 15);
+                        out.push(InformationTransition::Deterministic(paid));
+                        continue;
+                    }
+                    for target in state.library.cards().iter() {
+                        let mut next = paid;
+                        if !next.library.remove_known_or_unknown(target) {
+                            continue;
+                        }
+                        next.library.shuffle_all_unknown();
+                        next.hand.insert(target);
+                        out.push(InformationTransition::Deterministic(next));
+                    }
+                }
+            }
+        }
+    }
+
+    fn generate_crop_rotation(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        for crop in state
+            .hand
+            .iter()
+            .filter(|slot| matches!(self.spell_kind(*slot), Some(OpeningSpellKind::CropRotation)))
+        {
+            let lands: SmallVec<[SlotId; 8]> = state
+                .battlefield
+                .as_slice()
+                .iter()
+                .filter_map(|permanent| permanent.source().card_slot())
+                .filter(|slot| self.land_kind(*slot).is_some())
+                .collect();
+            let plans =
+                compute_payment_plans(state.mana, &self.payment_sources(state), [0, 0, 0, 0, 0, 1]);
+            for sacrificed in &lands {
+                for target in state.library.cards().iter() {
+                    let Some(OpeningCard::Land(target_land)) = self.card(target) else {
+                        continue;
+                    };
+                    for plan in &plans {
+                        let Some(mut next) = self.apply_payment_plan(state, *plan) else {
+                            continue;
+                        };
+                        if !next.move_card_from_battlefield(*sacrificed, Zone::Graveyard)
+                            || !next.move_card(crop, Zone::Hand, Zone::Graveyard)
+                            || !next.library.remove_known_or_unknown(target)
+                        {
+                            continue;
+                        }
+                        next.library.shuffle_all_unknown();
+                        let counters = u8::from(matches!(
+                            target_land.profile.kind,
+                            OpeningLandKind::GemstoneMine
+                        )) * 3;
+                        let permanent = PermanentInstance::new(PermanentSource::card(target))
+                            .with_tapped(target_land.profile.enters_tapped)
+                            .with_counters(counters);
+                        if next.battlefield.insert(permanent) {
+                            out.push(InformationTransition::Deterministic(next));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn generate_end_turn(
         &self,
         state: PackedStateV2,
@@ -983,7 +1637,7 @@ impl EngineOpeningModel {
             return;
         }
         let mut next = state;
-        next.flags &= !(LAND_PLAYED | TURN_DRAW_DONE);
+        next.flags &= !(LAND_PLAYED | TURN_DRAW_DONE | RAIN_ACTIVE);
         next.mana = ManaPool::default();
         Self::set_turn(&mut next, turn + 1);
         if !self.has_artifact(next) {
@@ -1010,6 +1664,18 @@ impl EngineOpeningModel {
                 *permanent,
                 permanent.with_tapped(stays_tapped).with_fresh(false),
             );
+        }
+
+        if next.flags & PACT_DUE != 0 {
+            for plan in
+                compute_payment_plans(next.mana, &self.payment_sources(next), [2, 0, 0, 0, 0, 2])
+            {
+                if let Some(mut paid) = self.apply_payment_plan(next, plan) {
+                    paid.flags &= !PACT_DUE;
+                    out.push(InformationTransition::Deterministic(paid));
+                }
+            }
+            return;
         }
 
         out.push(InformationTransition::Deterministic(next));
@@ -1093,6 +1759,19 @@ impl InformationModel for EngineOpeningModel {
         state: Self::State,
         out: &mut SmallVec<[InformationTransition<Self::State>; 16]>,
     ) {
+        if state.flags & PRETURN_WINDOW != 0 {
+            self.generate_rituals(state, out);
+            self.generate_tutors(state, out);
+            self.generate_green_engine_tutors(state, out);
+            self.generate_sacrifice_spells(state, out);
+            self.generate_crop_rotation(state, out);
+            self.generate_manamorphose(state, out);
+            self.generate_noxious_revival(state, out);
+            let mut pass = state;
+            pass.flags &= !PRETURN_WINDOW;
+            out.push(InformationTransition::Deterministic(pass));
+            return;
+        }
         if state.flags & TURN_DRAW_DONE == 0 {
             self.generate_turn_draw(state, out);
             return;
@@ -1105,6 +1784,16 @@ impl InformationModel for EngineOpeningModel {
         }
         self.generate_fetches(state, out);
         self.generate_artifact_casts(state, out);
+        self.generate_rituals(state, out);
+        self.generate_tutors(state, out);
+        self.generate_green_engine_tutors(state, out);
+        self.generate_sacrifice_spells(state, out);
+        self.generate_crop_rotation(state, out);
+        self.generate_demonic_led_tutors(state, out);
+        self.generate_wishclaw_tutors(state, out);
+        self.generate_manamorphose(state, out);
+        self.generate_gamble(state, out);
+        self.generate_noxious_revival(state, out);
         if self.resource_microsteps {
             self.generate_artifact_mana(state, out);
         }
@@ -1144,7 +1833,7 @@ fn mana_options(color_mask: u8, colorless: u8) -> SmallVec<[ManaPool; 5]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nextgen::PackedLibrary;
+    use crate::nextgen::{PackedLibrary, ReferenceSolver};
 
     fn model(names: &[&str]) -> EngineOpeningModel {
         let deck = DeckSpec::compile(
@@ -1518,5 +2207,427 @@ mod tests {
             model.should_keep(policy, left, 3),
             model.should_keep(policy, right, 3)
         );
+    }
+
+    #[test]
+    fn spirit_guides_are_direct_hand_payment_sources() {
+        let model = model(&["Elvish Spirit Guide", "Simian Spirit Guide"]);
+        let mut state = PackedStateV2::default();
+        state.hand = [0, 1].into_iter().collect();
+        let sources = model.payment_sources(state);
+        assert!(sources.iter().any(|source| {
+            source.slot == 0
+                && source.options.len() == 1
+                && source.options[0]
+                    == ManaOption::new(ManaPool([0, 0, 0, 0, 1, 0]), ResourceUse::Exile)
+        }));
+        assert!(sources.iter().any(|source| {
+            source.slot == 1
+                && source.options.len() == 1
+                && source.options[0]
+                    == ManaOption::new(ManaPool([0, 1, 0, 0, 0, 0]), ResourceUse::Exile)
+        }));
+    }
+
+    #[test]
+    fn rituals_pay_colored_costs_and_leave_net_mana() {
+        let model = model(&["Dark Ritual", "Rite of Flame", "Command Tower"]);
+        let mut dark = PackedStateV2::default();
+        dark.hand.insert(0);
+        dark.battlefield
+            .insert(PermanentInstance::new(PermanentSource::card(2)));
+        let mut out = SmallVec::new();
+        model.generate_rituals(dark, &mut out);
+        assert!(out.iter().any(|transition| matches!(
+            transition,
+            InformationTransition::Deterministic(next)
+                if next.graveyard.contains(0) && next.mana == ManaPool([3, 0, 0, 0, 0, 0])
+        )));
+
+        let mut rite = PackedStateV2::default();
+        rite.hand.insert(1);
+        rite.battlefield
+            .insert(PermanentInstance::new(PermanentSource::card(2)));
+        out.clear();
+        model.generate_rituals(rite, &mut out);
+        assert!(out.iter().any(|transition| matches!(
+            transition,
+            InformationTransition::Deterministic(next)
+                if next.graveyard.contains(1) && next.mana == ManaPool([0, 2, 0, 0, 0, 0])
+        )));
+    }
+
+    #[test]
+    fn hand_and_top_tutors_apply_exact_shuffle_information() {
+        let model = model(&["Demonic Tutor", "Imperial Seal", "Rhystic Study", "Blank"]);
+        let mut hand_tutor = PackedStateV2 {
+            library: PackedLibrary::new([2, 3].into_iter().collect()),
+            mana: ManaPool([1, 0, 0, 0, 0, 1]),
+            ..PackedStateV2::default()
+        };
+        hand_tutor.hand.insert(0);
+        let mut out = SmallVec::new();
+        model.generate_tutors(hand_tutor, &mut out);
+        assert!(out.iter().any(|transition| matches!(
+            transition,
+            InformationTransition::Deterministic(next)
+                if next.hand.contains(2)
+                    && next.graveyard.contains(0)
+                    && next.library.known_top_len() == 0
+        )));
+
+        let mut top_tutor = PackedStateV2 {
+            library: PackedLibrary::new([2].into_iter().collect()),
+            mana: ManaPool([1, 0, 0, 0, 0, 0]),
+            ..PackedStateV2::default()
+        };
+        top_tutor.library.push_known_top(3);
+        top_tutor.hand.insert(1);
+        out.clear();
+        model.generate_tutors(top_tutor, &mut out);
+        let stacked = out.iter().find_map(|transition| match transition {
+            InformationTransition::Deterministic(next)
+                if next.library.chance_draws()[0].slot == 2 =>
+            {
+                Some(next)
+            }
+            _ => None,
+        });
+        let stacked = stacked.expect("Seal can stack Rhystic");
+        assert_eq!(stacked.library.known_top_len(), 1);
+        assert!(stacked.library.unknown().contains(3));
+    }
+
+    #[test]
+    fn enlightened_tutor_only_selects_artifacts_or_enchantments() {
+        let model = model(&[
+            "Enlightened Tutor",
+            "Rhystic Study",
+            "Lotus Petal",
+            "Demonic Tutor",
+        ]);
+        let state = PackedStateV2 {
+            hand: [0].into_iter().collect(),
+            library: PackedLibrary::new([1, 2, 3].into_iter().collect()),
+            mana: ManaPool([0, 0, 0, 1, 0, 0]),
+            ..PackedStateV2::default()
+        };
+        let mut out = SmallVec::new();
+        model.generate_tutors(state, &mut out);
+        assert_eq!(out.len(), 2);
+        for transition in out {
+            let InformationTransition::Deterministic(next) = transition else {
+                panic!("tutor choice is deterministic");
+            };
+            assert_ne!(next.library.chance_draws()[0].slot, 3);
+        }
+    }
+
+    #[test]
+    fn wishclaw_casts_in_two_payments_and_deactivates_after_tutoring() {
+        let model = model(&["Wishclaw Talisman", "Rhystic Study"]);
+        let mut cast_state = PackedStateV2::default();
+        cast_state.hand.insert(0);
+        cast_state.mana = ManaPool([1, 0, 0, 0, 0, 1]);
+        let mut out = SmallVec::new();
+        model.generate_artifact_casts(cast_state, &mut out);
+        let InformationTransition::Deterministic(mut active) = out[0] else {
+            panic!("Wishclaw cast is deterministic");
+        };
+        active.library = PackedLibrary::new([1].into_iter().collect());
+        active.mana = ManaPool([0, 0, 0, 0, 0, 1]);
+        out.clear();
+        model.generate_wishclaw_tutors(active, &mut out);
+        let InformationTransition::Deterministic(tutored) = out[0] else {
+            panic!("Wishclaw activation is deterministic");
+        };
+        assert!(tutored.hand.contains(1));
+        let claw = tutored
+            .battlefield
+            .as_slice()
+            .iter()
+            .find(|permanent| permanent.source() == PermanentSource::card(0))
+            .expect("transferred Wishclaw remains represented");
+        assert_eq!(claw.counters(), 0);
+        assert!(!model.has_artifact(tutored));
+    }
+
+    #[test]
+    fn live_caverns_allows_instant_top_tutor_before_turn_one_draw() {
+        let model = model(&[
+            "Gemstone Caverns",
+            "Vampiric Tutor",
+            "Ancient Tomb",
+            "Lotus Petal",
+            "Blank",
+            "Rhystic Study",
+            "Blank library",
+        ]);
+        let state = PackedStateV2 {
+            hand: [0, 1, 2, 3, 4].into_iter().collect(),
+            library: PackedLibrary::new([5, 6].into_iter().collect()),
+            ..PackedStateV2::default()
+        };
+        let value = model
+            .pregame_states(state, true)
+            .into_iter()
+            .map(|start| ReferenceSolver::new(&model).solve(start, 12).value)
+            .fold(0.0, f64::max);
+        assert_eq!(value, 1.0);
+
+        let preturn = model
+            .pregame_states(state, true)
+            .into_iter()
+            .find(|start| start.exile.contains(4))
+            .expect("Caverns exile choice");
+        let mut out = SmallVec::new();
+        model.transitions(preturn, &mut out);
+        assert!(out.len() > 1, "Vampiric Tutor plus pass are available");
+    }
+
+    #[test]
+    fn manamorphose_uses_explicit_mana_choices_and_draw_chance() {
+        let model = model(&["Manamorphose", "Rhystic Study", "Blank"]);
+        let state = PackedStateV2 {
+            hand: [0].into_iter().collect(),
+            library: PackedLibrary::new([1, 2].into_iter().collect()),
+            mana: ManaPool([0, 1, 0, 0, 0, 1]),
+            ..PackedStateV2::default()
+        };
+        let mut out = SmallVec::new();
+        model.generate_manamorphose(state, &mut out);
+        assert_eq!(out.len(), 15);
+        assert!(out.iter().all(|transition| matches!(
+            transition,
+            InformationTransition::Chance(outcomes)
+                if outcomes.len() == 2
+                    && outcomes.iter().all(|(next, probability)|
+                        next.graveyard.contains(0) && (*probability - 0.5).abs() < f64::EPSILON)
+        )));
+    }
+
+    #[test]
+    fn gamble_randomly_discards_from_the_actual_post_search_hand() {
+        let model = model(&["Gamble", "Blank", "Rhystic Study"]);
+        let state = PackedStateV2 {
+            hand: [0, 1].into_iter().collect(),
+            library: PackedLibrary::new([2].into_iter().collect()),
+            mana: ManaPool([0, 1, 0, 0, 0, 0]),
+            ..PackedStateV2::default()
+        };
+        let mut out = SmallVec::new();
+        model.generate_gamble(state, &mut out);
+        assert_eq!(out.len(), 1);
+        let InformationTransition::Chance(outcomes) = &out[0] else {
+            panic!("Gamble discard must remain a chance node");
+        };
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes
+            .iter()
+            .any(|(next, probability)| next.hand.contains(2)
+                && (*probability - 0.5).abs() < f64::EPSILON));
+        assert!(outcomes
+            .iter()
+            .any(|(next, probability)| next.graveyard.contains(2)
+                && (*probability - 0.5).abs() < f64::EPSILON));
+    }
+
+    #[test]
+    fn noxious_revival_moves_a_graveyard_card_to_known_top() {
+        let model = model(&["Noxious Revival", "Rhystic Study"]);
+        let state = PackedStateV2 {
+            hand: [0].into_iter().collect(),
+            graveyard: [1].into_iter().collect(),
+            ..PackedStateV2::default()
+        };
+        let mut out = SmallVec::new();
+        model.generate_noxious_revival(state, &mut out);
+        let InformationTransition::Deterministic(next) = out[0] else {
+            panic!("Noxious target is deterministic");
+        };
+        assert!(next.graveyard.contains(0));
+        assert!(!next.graveyard.contains(1));
+        assert_eq!(next.library.chance_draws()[0].slot, 1);
+    }
+
+    #[test]
+    fn demonic_tutor_can_hold_priority_and_crack_led() {
+        let model = model(&[
+            "Demonic Tutor",
+            "Lion's Eye Diamond",
+            "Blank",
+            "Rhystic Study",
+        ]);
+        let mut state = PackedStateV2 {
+            hand: [0, 2].into_iter().collect(),
+            library: PackedLibrary::new([3].into_iter().collect()),
+            mana: ManaPool([1, 0, 0, 0, 0, 1]),
+            ..PackedStateV2::default()
+        };
+        state
+            .battlefield
+            .insert(PermanentInstance::new(PermanentSource::card(1)));
+        let mut out = SmallVec::new();
+        model.generate_demonic_led_tutors(state, &mut out);
+        assert_eq!(out.len(), 5);
+        assert!(out.iter().any(|transition| matches!(
+            transition,
+            InformationTransition::Deterministic(next)
+                if next.hand.contains(3)
+                    && next.graveyard.contains(0)
+                    && next.graveyard.contains(1)
+                    && next.graveyard.contains(2)
+                    && next.mana == ManaPool([0, 0, 3, 0, 0, 0])
+        )));
+    }
+
+    #[test]
+    fn green_suns_zenith_puts_heartwood_into_play_and_shuffles_itself() {
+        let model = model(&["Green Sun's Zenith", "Heartwood Storyteller"]);
+        let state = PackedStateV2 {
+            hand: [0].into_iter().collect(),
+            library: PackedLibrary::new([1].into_iter().collect()),
+            mana: ManaPool([0, 0, 0, 0, 1, 3]),
+            ..PackedStateV2::default()
+        };
+        let mut out = SmallVec::new();
+        model.generate_green_engine_tutors(state, &mut out);
+        let InformationTransition::Deterministic(next) = out[0] else {
+            panic!("Zenith target is deterministic");
+        };
+        assert!(next.battlefield.contains_source(PermanentSource::card(1)));
+        assert!(next.library.unknown().contains(0));
+        assert!(!next.hand.contains(0));
+    }
+
+    #[test]
+    fn summoners_pact_requires_a_real_next_upkeep_payment() {
+        let model = model(&[
+            "Summoner's Pact",
+            "Heartwood Storyteller",
+            "Ancient Tomb",
+            "Tropical Island",
+            "Elvish Spirit Guide",
+        ]);
+        let search = PackedStateV2 {
+            hand: [0].into_iter().collect(),
+            library: PackedLibrary::new([1].into_iter().collect()),
+            ..PackedStateV2::default()
+        };
+        let mut out = SmallVec::new();
+        model.generate_green_engine_tutors(search, &mut out);
+        let InformationTransition::Deterministic(searched) = out[0] else {
+            panic!("Pact target is deterministic");
+        };
+        assert!(searched.hand.contains(1));
+        assert!(searched.exile.contains(0));
+        assert_ne!(searched.flags & PACT_DUE, 0);
+
+        let mut terminal = PackedStateV2::default();
+        terminal.flags = TURN_DRAW_DONE | PACT_DUE;
+        terminal
+            .battlefield
+            .insert(PermanentInstance::new(PermanentSource::card(1)));
+        terminal
+            .battlefield
+            .insert(PermanentInstance::new(PermanentSource::card(2)));
+        terminal
+            .battlefield
+            .insert(PermanentInstance::new(PermanentSource::card(3)));
+        assert_eq!(model.engine_value(terminal), None);
+        terminal.hand.insert(4);
+        assert_eq!(model.engine_value(terminal), Some(0.70));
+
+        out.clear();
+        model.generate_end_turn(terminal, &mut out);
+        assert!(!out.is_empty());
+        assert!(out.iter().all(|transition| matches!(
+            transition,
+            InformationTransition::Deterministic(next)
+                if next.flags & PACT_DUE == 0 && next.exile.contains(4)
+        )));
+    }
+
+    #[test]
+    fn rain_of_filth_includes_tap_then_sacrifice_composite_mana() {
+        let model = model(&["Rain of Filth", "Command Tower"]);
+        let mut state = PackedStateV2 {
+            hand: [0].into_iter().collect(),
+            mana: ManaPool([1, 0, 0, 0, 0, 0]),
+            ..PackedStateV2::default()
+        };
+        state
+            .battlefield
+            .insert(PermanentInstance::new(PermanentSource::card(1)));
+        let mut out = SmallVec::new();
+        model.generate_sacrifice_spells(state, &mut out);
+        let InformationTransition::Deterministic(active) = out[0] else {
+            panic!("Rain cast is deterministic");
+        };
+        assert_ne!(active.flags & RAIN_ACTIVE, 0);
+        let source = model
+            .payment_sources(active)
+            .into_iter()
+            .find(|source| source.slot == 1)
+            .expect("rain-enabled land");
+        assert!(source.options.iter().any(|option| {
+            option.resource_use == ResourceUse::Sacrifice
+                && option.mana == ManaPool([1, 0, 1, 0, 0, 0])
+        }));
+    }
+
+    #[test]
+    fn crop_rotation_can_tap_and_sacrifice_the_same_land() {
+        let model = model(&["Crop Rotation", "Tropical Island", "Ancient Tomb"]);
+        let mut state = PackedStateV2 {
+            hand: [0].into_iter().collect(),
+            library: PackedLibrary::new([2].into_iter().collect()),
+            ..PackedStateV2::default()
+        };
+        state
+            .battlefield
+            .insert(PermanentInstance::new(PermanentSource::card(1)));
+        let mut out = SmallVec::new();
+        model.generate_crop_rotation(state, &mut out);
+        let InformationTransition::Deterministic(next) = out[0] else {
+            panic!("Crop target is deterministic");
+        };
+        assert!(next.graveyard.contains(0));
+        assert!(next.graveyard.contains(1));
+        assert!(next.battlefield.contains_source(PermanentSource::card(2)));
+    }
+
+    #[test]
+    fn sacrifice_spells_can_use_the_commander() {
+        let model = model(&["Culling the Weak", "Diabolic Intent", "Rhystic Study"]);
+        let mut culling = PackedStateV2 {
+            hand: [0].into_iter().collect(),
+            mana: ManaPool([1, 0, 0, 0, 0, 0]),
+            ..PackedStateV2::default()
+        };
+        assert!(culling.put_commander_on_battlefield(false, true));
+        let mut out = SmallVec::new();
+        model.generate_sacrifice_spells(culling, &mut out);
+        assert!(out.iter().any(|transition| matches!(
+            transition,
+            InformationTransition::Deterministic(next)
+                if next.commander.zone == CommanderZone::Command
+                    && next.mana == ManaPool([4, 0, 0, 0, 0, 0])
+        )));
+
+        let mut intent = PackedStateV2 {
+            hand: [1].into_iter().collect(),
+            library: PackedLibrary::new([2].into_iter().collect()),
+            mana: ManaPool([1, 0, 0, 0, 0, 1]),
+            ..PackedStateV2::default()
+        };
+        assert!(intent.put_commander_on_battlefield(false, true));
+        out.clear();
+        model.generate_sacrifice_spells(intent, &mut out);
+        assert!(out.iter().any(|transition| matches!(
+            transition,
+            InformationTransition::Deterministic(next)
+                if next.commander.zone == CommanderZone::Command && next.hand.contains(2)
+        )));
     }
 }

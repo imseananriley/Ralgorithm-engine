@@ -26,7 +26,7 @@ pub use benchmark::{
 pub use card_mask::{CardMask, SlotId, MAX_DECK_SLOTS};
 pub use card_spec::{
     ActionClass, ActionTemplateMask, CardFlags, CardMetadata, CardSpec, DeckSpec,
-    OpeningArtifactKind, OpeningLandKind, OpeningManaProfile,
+    OpeningArtifactKind, OpeningLandKind, OpeningManaProfile, OpeningSpellKind,
 };
 pub use library::{ChanceDraw, ClassChanceDraw, PackedLibrary, KNOWN_TOP_CAPACITY};
 pub use mana_closure::{

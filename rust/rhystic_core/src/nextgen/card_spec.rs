@@ -21,6 +21,7 @@ impl CardFlags {
     pub const TUTOR: Self = Self(1 << 6);
     pub const ENGINE: Self = Self(1 << 7);
     pub const INTERACTION: Self = Self(1 << 8);
+    pub const ENCHANTMENT: Self = Self(1 << 9);
 
     pub const fn contains(self, flag: Self) -> bool {
         (self.0 & flag.0) == flag.0
@@ -95,6 +96,7 @@ pub struct CardMetadata {
     pub payment_gate_costs: [Option<Cost>; 2],
     pub opening_mana: OpeningManaProfile,
     pub opening_artifact: OpeningArtifactKind,
+    pub opening_spell: OpeningSpellKind,
 }
 
 impl CardMetadata {
@@ -109,6 +111,7 @@ impl CardMetadata {
             payment_gate_costs: payment_gate_costs(name),
             opening_mana: opening_mana_profile(name),
             opening_artifact: opening_artifact_kind(name),
+            opening_spell: opening_spell_kind(name),
         }
     }
 }
@@ -124,6 +127,7 @@ pub struct CardSpec {
     pub payment_gate_costs: [Option<Cost>; 2],
     pub opening_mana: OpeningManaProfile,
     pub opening_artifact: OpeningArtifactKind,
+    pub opening_spell: OpeningSpellKind,
     pub semantic_class: u8,
 }
 
@@ -140,6 +144,7 @@ impl CardSpec {
             payment_gate_costs: metadata.payment_gate_costs,
             opening_mana: metadata.opening_mana,
             opening_artifact: metadata.opening_artifact,
+            opening_spell: metadata.opening_spell,
             // Classes remain exact until an equivalence proof supplies a coarser partition.
             semantic_class: slot,
         }
@@ -190,6 +195,7 @@ pub enum OpeningArtifactKind {
     ParadiseMantle = 7,
     SolRing = 8,
     ManaVault = 9,
+    WishclawTalisman = 10,
 }
 
 fn opening_artifact_kind(name: &str) -> OpeningArtifactKind {
@@ -203,7 +209,59 @@ fn opening_artifact_kind(name: &str) -> OpeningArtifactKind {
         "Paradise Mantle" => OpeningArtifactKind::ParadiseMantle,
         "Sol Ring" => OpeningArtifactKind::SolRing,
         "Mana Vault" => OpeningArtifactKind::ManaVault,
+        "Wishclaw Talisman" => OpeningArtifactKind::WishclawTalisman,
         _ => OpeningArtifactKind::None,
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum OpeningSpellKind {
+    #[default]
+    None = 0,
+    ElvishSpiritGuide = 1,
+    SimianSpiritGuide = 2,
+    DarkRitual = 3,
+    RiteOfFlame = 4,
+    DemonicTutor = 5,
+    ImperialSeal = 6,
+    VampiricTutor = 7,
+    EnlightenedTutor = 8,
+    SchemingSymmetry = 9,
+    Manamorphose = 10,
+    Gamble = 11,
+    NoxiousRevival = 12,
+    GreenSunsZenith = 13,
+    SummonersPact = 14,
+    CropRotation = 15,
+    CullingTheWeak = 16,
+    DiabolicIntent = 17,
+    InfernalPlunge = 18,
+    RainOfFilth = 19,
+}
+
+fn opening_spell_kind(name: &str) -> OpeningSpellKind {
+    match name {
+        "Elvish Spirit Guide" => OpeningSpellKind::ElvishSpiritGuide,
+        "Simian Spirit Guide" => OpeningSpellKind::SimianSpiritGuide,
+        "Dark Ritual" => OpeningSpellKind::DarkRitual,
+        "Rite of Flame" => OpeningSpellKind::RiteOfFlame,
+        "Demonic Tutor" => OpeningSpellKind::DemonicTutor,
+        "Imperial Seal" => OpeningSpellKind::ImperialSeal,
+        "Vampiric Tutor" => OpeningSpellKind::VampiricTutor,
+        "Enlightened Tutor" => OpeningSpellKind::EnlightenedTutor,
+        "Scheming Symmetry" => OpeningSpellKind::SchemingSymmetry,
+        "Manamorphose" => OpeningSpellKind::Manamorphose,
+        "Gamble" => OpeningSpellKind::Gamble,
+        "Noxious Revival" => OpeningSpellKind::NoxiousRevival,
+        "Green Sun's Zenith" => OpeningSpellKind::GreenSunsZenith,
+        "Summoner's Pact" => OpeningSpellKind::SummonersPact,
+        "Crop Rotation" => OpeningSpellKind::CropRotation,
+        "Culling the Weak" => OpeningSpellKind::CullingTheWeak,
+        "Diabolic Intent" => OpeningSpellKind::DiabolicIntent,
+        "Infernal Plunge" => OpeningSpellKind::InfernalPlunge,
+        "Rain of Filth" => OpeningSpellKind::RainOfFilth,
+        _ => OpeningSpellKind::None,
     }
 }
 
@@ -298,6 +356,16 @@ fn compile_flags(name: &str) -> CardFlags {
     }
     if is_interaction(name) {
         flags.insert(CardFlags::INTERACTION);
+    }
+    if matches!(
+        name,
+        "Copy Enchantment"
+            | "Flash Photography"
+            | "Mystic Remora"
+            | "Rhystic Study"
+            | "Smothering Tithe"
+    ) {
+        flags.insert(CardFlags::ENCHANTMENT);
     }
     flags
 }

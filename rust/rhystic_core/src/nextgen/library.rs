@@ -75,6 +75,13 @@ impl PackedLibrary {
         self.known_top_len = 0;
     }
 
+    pub fn insert_unknown(&mut self, slot: SlotId) -> bool {
+        if self.cards().contains(slot) {
+            return false;
+        }
+        self.unknown.insert(slot)
+    }
+
     pub fn chance_draws(self) -> Vec<ChanceDraw> {
         if self.known_top_len > 0 {
             return vec![ChanceDraw {
