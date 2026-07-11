@@ -30,4 +30,4 @@ python3 scripts/source_manifest.py --out benchmarks/source_manifest.json
 
 Run configurations must record the manifest digest, deck digest, root seed, policy version, objective weights, and state-cap behavior.
 
-The current generation comparison is documented in [docs/generation5_benchmark.md](docs/generation5_benchmark.md).
+The current generation comparison is documented in [docs/generation6_benchmark.md](docs/generation6_benchmark.md).

@@ -3365,17 +3365,7 @@ fn generate_fast_top_tutor_actions_for_cost(
             for mana in pay_options(state.mana(), cost) {
                 let mut next = state.clone();
                 next.remove_hand_to_graveyard(ctx, tutor);
-                next.library = known_top_library_after_shuffle(
-                    ctx,
-                    target,
-                    state
-                        .library
-                        .iter()
-                        .copied()
-                        .filter(|card| *card != target)
-                        .collect(),
-                )
-                .into();
+                next.library = known_top_library_after_shuffle(ctx, target, &state.library);
                 next.set_mana(mana);
                 actions.push(FastAction::new(
                     after_cast_fast(ctx, state, next),
@@ -4112,14 +4102,14 @@ fn tutor_targets_fast(ctx: &FastContext, tutor: &str, state: &FastState) -> Vec<
         tutor,
         "Imperial Seal" | "Scheming Symmetry" | "Vampiric Tutor"
     ) {
-        let mut candidates: Vec<CardId> = [
+        return [
             "Rhystic Study",
             "Heartwood Storyteller",
             "Demonic Tutor",
-            "Diabolic Intent",
-            "Grim Tutor",
             "Beseech the Mirror",
             "Wishclaw Talisman",
+            "Diabolic Intent",
+            "Grim Tutor",
             "Gamble",
             "Enlightened Tutor",
             "Mystical Tutor",
@@ -4153,40 +4143,36 @@ fn tutor_targets_fast(ctx: &FastContext, tutor: &str, state: &FastState) -> Vec<
         .filter_map(|name| ctx.card_id(name))
         .filter(|target| state.library.contains_card(*target))
         .collect();
-        sort_engine_targets(ctx, &mut candidates);
-        return candidates;
     }
     if tutor == "Mystical Tutor" {
-        let mut candidates: Vec<CardId> = [
-            "An Offer You Can't Refuse",
-            "Beseech the Mirror",
-            "Crop Rotation",
-            "Culling the Weak",
-            "Dark Ritual",
+        return [
             "Demonic Tutor",
+            "Beseech the Mirror",
             "Diabolic Intent",
-            "Eldritch Evolution",
-            "Enlightened Tutor",
-            "Green Sun's Zenith",
             "Grim Tutor",
+            "Enlightened Tutor",
+            "Worldly Tutor",
             "Idyllic Tutor",
-            "Imperial Seal",
-            "Infernal Plunge",
-            "Manamorphose",
+            "Green Sun's Zenith",
+            "Eldritch Evolution",
             "Neoform",
+            "Summoner's Pact",
+            "Crop Rotation",
+            "Dark Ritual",
+            "Culling the Weak",
             "Rain of Filth",
             "Rite of Flame",
+            "Manamorphose",
+            "An Offer You Can't Refuse",
+            "Imperial Seal",
+            "Infernal Plunge",
             "Scheming Symmetry",
-            "Summoner's Pact",
             "Vampiric Tutor",
-            "Worldly Tutor",
         ]
         .iter()
         .filter_map(|name| ctx.card_id(name))
         .filter(|target| state.library.contains_card(*target))
         .collect();
-        sort_engine_targets(ctx, &mut candidates);
-        return candidates;
     }
     if tutor == "Enlightened Tutor" || tutor == "Idyllic Tutor" {
         return ctx
@@ -4196,29 +4182,25 @@ fn tutor_targets_fast(ctx: &FastContext, tutor: &str, state: &FastState) -> Vec<
             .collect();
     }
     if tutor == "Worldly Tutor" {
-        let mut candidates: Vec<CardId> = [
+        return [
+            "Heartwood Storyteller",
+            "Tinder Wall",
             "Birds of Paradise",
             "Deathrite Shaman",
-            "Heartwood Storyteller",
             "Ignoble Hierarch",
             "Noble Hierarch",
-            "Tinder Wall",
             "Wild Cantor",
         ]
         .iter()
         .filter_map(|name| ctx.card_id(name))
         .filter(|target| state.library.contains_card(*target))
         .collect();
-        sort_engine_targets(ctx, &mut candidates);
-        return candidates;
     }
-    let mut candidates: Vec<CardId> = ["Rhystic Study", "Heartwood Storyteller"]
+    ["Rhystic Study", "Heartwood Storyteller"]
         .iter()
         .filter_map(|name| ctx.card_id(name))
         .filter(|target| state.library.contains_card(*target))
-        .collect();
-    sort_engine_targets(ctx, &mut candidates);
-    candidates
+        .collect()
 }
 
 fn offer_bait_can_help(ctx: &FastContext, state: &FastState, bait: CardId) -> bool {
@@ -4329,14 +4311,6 @@ fn engine_target_priority_rank(target: &str) -> u8 {
     }
 }
 
-fn sort_engine_targets(ctx: &FastContext, targets: &mut [CardId]) {
-    targets.sort_unstable_by(|left, right| {
-        engine_target_priority_rank(ctx.card_name(*left))
-            .cmp(&engine_target_priority_rank(ctx.card_name(*right)))
-            .then_with(|| ctx.card_name(*left).cmp(ctx.card_name(*right)))
-    });
-}
-
 fn label_priority_name(label: &str) -> i32 {
     if label.contains("Rhystic Study")
         || label.contains("Tutor")
@@ -4390,7 +4364,11 @@ fn label_priority_name(label: &str) -> i32 {
 }
 
 fn tutor_target_priority_fast(ctx: &FastContext, tutor: &str, target: CardId) -> i32 {
-    label_priority_name(tutor).max(label_priority_name(ctx.card_name(target)))
+    if matches!(tutor, "Imperial Seal" | "Scheming Symmetry") {
+        label_priority_name(ctx.card_name(target))
+    } else {
+        ENGINE_TUTOR_PRIORITY
+    }
 }
 
 fn creature_perm_fast(ctx: &mut FastContext, card: &str) -> FastPerm {
@@ -4605,13 +4583,17 @@ fn obscure_library_top_after_shuffle(ctx: &mut FastContext, library: &mut Vec<Ca
 fn known_top_library_after_shuffle(
     ctx: &mut FastContext,
     top: CardId,
-    mut library: Vec<CardId>,
-) -> Vec<CardId> {
-    obscure_library_top_after_shuffle(ctx, &mut library);
-    let mut out = Vec::with_capacity(library.len() + 1);
+    library: &PersistentLibrary,
+) -> PersistentLibrary {
+    let mut out = Vec::with_capacity(library.len());
     out.push(top);
-    out.extend(library);
-    out
+    out.extend(library.iter().copied().filter(|card| *card != top));
+    if ctx.strict_shuffle_hidden {
+        let mut tail = out.split_off(1);
+        obscure_library_top_after_shuffle(ctx, &mut tail);
+        out.extend(tail);
+    }
+    out.into()
 }
 
 fn mana_for_color_index(index: usize) -> Mana {
@@ -5060,20 +5042,20 @@ fn close_turn_fast_inner(
         if request.action_sort {
             actions.sort_by_key(|action| action.priority);
         }
+        if let Some((_index, label)) = best_immediate_success_fast(ctx, request, &actions) {
+            return FastCloseTurnResult {
+                closed: seen_order,
+                success: true,
+                hit_limit,
+                label: Some(label),
+            };
+        }
         for action in actions {
             let next_state = action.next_state;
             if seen_set.contains(&next_state)
                 || mana_dominated_fast(ctx, request, &next_state, &mut best_mana)
             {
                 continue;
-            }
-            if let Some(label) = success_label_fast(ctx, request, &next_state) {
-                return FastCloseTurnResult {
-                    closed: seen_order,
-                    success: true,
-                    hit_limit,
-                    label: Some(label),
-                };
             }
             if seen_order.len() >= request.state_limit {
                 hit_limit = true;
@@ -5137,6 +5119,31 @@ fn close_turn_trace_fast_inner(
         if request.action_sort {
             actions.sort_by_key(|action| action.priority);
         }
+        if let Some((success_index, label)) = best_immediate_success_fast(ctx, request, &actions) {
+            let action = &actions[success_index];
+            let mut path = build_trace_path(&state, &start_paths, &parents);
+            path.push(trace_label_for_transition(
+                ctx,
+                &state,
+                &action.next_state,
+                action,
+            ));
+            return FastTraceCloseTurnResult {
+                closed: seen_order
+                    .iter()
+                    .map(|closed| {
+                        (
+                            closed.clone(),
+                            build_trace_path(closed, &start_paths, &parents),
+                        )
+                    })
+                    .collect(),
+                success: true,
+                hit_limit,
+                label: Some(label),
+                path,
+            };
+        }
         for action in actions {
             let next_state = action.next_state.clone();
             if seen_set.contains(&next_state)
@@ -5145,25 +5152,6 @@ fn close_turn_trace_fast_inner(
                 continue;
             }
             let transition_label = trace_label_for_transition(ctx, &state, &next_state, &action);
-            if let Some(label) = success_label_fast(ctx, request, &next_state) {
-                let mut path = build_trace_path(&state, &start_paths, &parents);
-                path.push(transition_label);
-                return FastTraceCloseTurnResult {
-                    closed: seen_order
-                        .iter()
-                        .map(|closed| {
-                            (
-                                closed.clone(),
-                                build_trace_path(closed, &start_paths, &parents),
-                            )
-                        })
-                        .collect(),
-                    success: true,
-                    hit_limit,
-                    label: Some(label),
-                    path,
-                };
-            }
             if seen_order.len() >= request.state_limit {
                 hit_limit = true;
                 continue;
@@ -5190,6 +5178,20 @@ fn close_turn_trace_fast_inner(
         label: None,
         path: Vec::new(),
     }
+}
+
+fn best_immediate_success_fast(
+    ctx: &mut FastContext,
+    request: &CloseTurnRequest,
+    actions: &[FastAction],
+) -> Option<(usize, String)> {
+    actions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, action)| {
+            success_label_fast(ctx, request, &action.next_state).map(|label| (index, label))
+        })
+        .min_by_key(|(index, label)| (engine_target_priority_rank(label), *index))
 }
 
 fn build_trace_path(
@@ -9711,17 +9713,7 @@ fn preturn_caverns_top_tutor_states_fast(
             let target_name = ctx.card_name(target).to_string();
             let mut next = state.clone();
             next.remove_hand_to_graveyard(ctx, tutor);
-            next.library = known_top_library_after_shuffle(
-                ctx,
-                target,
-                state
-                    .library
-                    .iter()
-                    .copied()
-                    .filter(|card| *card != target)
-                    .collect(),
-            )
-            .into();
+            next.library = known_top_library_after_shuffle(ctx, target, &state.library);
             next.set_mana([0, 0, 0, 0, 0, 0]);
             next.set_spells_this_turn(0);
             out.push((next, format!("preturn cast {tutor_name} for {target_name}")));
@@ -10339,6 +10331,151 @@ mod tests {
         }
         for name in ["Diabolic Intent", "Imperial Seal", "Birds of Paradise"] {
             assert_eq!(label_priority_name(name), DEFAULT_PRIORITY, "{name}");
+        }
+    }
+
+    #[test]
+    fn static_tutor_targets_preserve_rank_then_name_order() {
+        let names = [
+            "An Offer You Can't Refuse",
+            "Beseech the Mirror",
+            "Birds of Paradise",
+            "Chrome Mox",
+            "Crop Rotation",
+            "Culling the Weak",
+            "Dark Ritual",
+            "Deathrite Shaman",
+            "Demonic Tutor",
+            "Diabolic Intent",
+            "Eldritch Evolution",
+            "Elvish Spirit Guide",
+            "Enlightened Tutor",
+            "Gamble",
+            "Green Sun's Zenith",
+            "Grim Tutor",
+            "Heartwood Storyteller",
+            "Idyllic Tutor",
+            "Ignoble Hierarch",
+            "Imperial Seal",
+            "Infernal Plunge",
+            "Lion's Eye Diamond",
+            "Lotus Petal",
+            "Mana Vault",
+            "Manamorphose",
+            "Mox Amber",
+            "Mox Diamond",
+            "Mox Opal",
+            "Mystical Tutor",
+            "Neoform",
+            "Noble Hierarch",
+            "Paradise Mantle",
+            "Rain of Filth",
+            "Rhystic Study",
+            "Rite of Flame",
+            "Scheming Symmetry",
+            "Simian Spirit Guide",
+            "Sol Ring",
+            "Springleaf Drum",
+            "Summoner's Pact",
+            "Tinder Wall",
+            "Vampiric Tutor",
+            "Wild Cantor",
+            "Wishclaw Talisman",
+            "Worldly Tutor",
+        ];
+        let mut context = FastContext::with_card_names(names);
+        let mut fixture = fixture_state(Vec::new());
+        fixture.library = names.iter().map(|name| (*name).to_string()).collect();
+        let state = FastState::from_fixture(&mut context, &fixture);
+
+        for tutor in [
+            "Imperial Seal",
+            "Scheming Symmetry",
+            "Vampiric Tutor",
+            "Mystical Tutor",
+            "Worldly Tutor",
+        ] {
+            let targets = tutor_targets_fast(&context, tutor, &state);
+            assert!(
+                targets.windows(2).all(|pair| {
+                    let left = context.card_name(pair[0]);
+                    let right = context.card_name(pair[1]);
+                    (engine_target_priority_rank(left), left)
+                        <= (engine_target_priority_rank(right), right)
+                }),
+                "{tutor}: {:?}",
+                targets
+                    .iter()
+                    .map(|card| {
+                        let name = context.card_name(*card);
+                        (engine_target_priority_rank(name), name)
+                    })
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn immediate_success_prefers_rhystic_over_heartwood() {
+        let mut context = FastContext::with_card_names(["Rhystic Study", "Heartwood Storyteller"]);
+        let mut heartwood_fixture = fixture_state(Vec::new());
+        heartwood_fixture.engine_count = 1;
+        heartwood_fixture
+            .engine_names
+            .push("Heartwood Storyteller@2".to_string());
+        heartwood_fixture.turn = 2;
+        let mut rhystic_fixture = fixture_state(Vec::new());
+        rhystic_fixture.engine_count = 1;
+        rhystic_fixture
+            .engine_names
+            .push("Rhystic Study@2".to_string());
+        rhystic_fixture.turn = 2;
+        let actions = vec![
+            FastAction::new(
+                FastState::from_fixture(&mut context, &heartwood_fixture),
+                ENGINE_TUTOR_PRIORITY,
+            ),
+            FastAction::new(
+                FastState::from_fixture(&mut context, &rhystic_fixture),
+                ENGINE_TUTOR_PRIORITY,
+            ),
+        ];
+        let request = CloseTurnRequest {
+            states: Vec::new(),
+            state_limit: 100,
+            max_turns: 2,
+            goal: "engine".to_string(),
+            engine_target_count: 1,
+            engine_success_policy: "resilient".to_string(),
+            remora_upkeep_payments: 2,
+            action_sort: true,
+        };
+
+        assert_eq!(
+            best_immediate_success_fast(&mut context, &request, &actions).map(|(_, label)| label),
+            Some("Rhystic Study".to_string())
+        );
+    }
+
+    #[test]
+    fn optimized_tutor_priorities_match_legacy_classification() {
+        let context = FastContext::with_card_names([
+            "Imperial Seal",
+            "Scheming Symmetry",
+            "Demonic Tutor",
+            "Rhystic Study",
+            "Sol Ring",
+            "Birds of Paradise",
+        ]);
+        for tutor in ["Imperial Seal", "Scheming Symmetry", "Demonic Tutor"] {
+            for target_name in ["Rhystic Study", "Sol Ring", "Birds of Paradise"] {
+                let target = context.card_id(target_name).expect("target card");
+                assert_eq!(
+                    tutor_target_priority_fast(&context, tutor, target),
+                    label_priority_name(tutor).max(label_priority_name(target_name)),
+                    "{tutor} -> {target_name}"
+                );
+            }
         }
     }
 
