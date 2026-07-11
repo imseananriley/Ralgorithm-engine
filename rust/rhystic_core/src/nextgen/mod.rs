@@ -14,7 +14,7 @@ mod state;
 
 pub use benchmark::{bench_nextgen, NextgenBenchReport};
 pub use card_mask::{CardMask, SlotId, MAX_DECK_SLOTS};
-pub use card_spec::{ActionClass, CardFlags, CardMetadata, CardSpec, DeckSpec};
+pub use card_spec::{ActionClass, ActionTemplateMask, CardFlags, CardMetadata, CardSpec, DeckSpec};
 pub use library::{ChanceDraw, ClassChanceDraw, PackedLibrary, KNOWN_TOP_CAPACITY};
 pub use mana_closure::{
     compute_mana_closure, compute_payment_plans, ManaOption, ManaOutcome, ManaPool, ManaSource,

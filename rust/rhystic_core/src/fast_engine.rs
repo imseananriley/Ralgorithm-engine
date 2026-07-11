@@ -1,7 +1,7 @@
 // PersistentLibrary mutates only memoized digests/canonical views; logical card order is stable.
 #![allow(clippy::mutable_key_type)]
 
-use crate::nextgen::{CardFlags, CardMetadata};
+use crate::nextgen::{ActionTemplateMask, CardFlags, CardMetadata};
 use crate::{
     add_mana, bottom_choices, generate_fixture_action_cores, pay_options, state_signature,
     ActionFixturePayload, CloseTurnRequest, CloseTurnResponse, Cost, EarliestRequest, FixturePerm,
@@ -38,6 +38,7 @@ pub struct PersistentLibrary(Rc<LibraryStorage>);
 struct LibraryStorage {
     cards: Vec<CardId>,
     hash: Cell<Option<u64>>,
+    membership: Cell<Option<[u64; 4]>>,
     canonical: [OnceCell<Rc<LibraryStorage>>; 4],
 }
 
@@ -46,6 +47,7 @@ impl LibraryStorage {
         Self {
             cards,
             hash: Cell::new(None),
+            membership: Cell::new(None),
             canonical: std::array::from_fn(|_| OnceCell::new()),
         }
     }
@@ -66,6 +68,25 @@ impl Clone for LibraryStorage {
 impl PersistentLibrary {
     pub fn is_shared_with(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
+    }
+
+    fn contains_card(&self, card: CardId) -> bool {
+        let index = card as usize;
+        if index >= 256 {
+            return self.0.cards.contains(&card);
+        }
+        let membership = self.0.membership.get().unwrap_or_else(|| {
+            let mut words = [0u64; 4];
+            for item in &self.0.cards {
+                let item_index = *item as usize;
+                if item_index < 256 {
+                    words[item_index / 64] |= 1u64 << (item_index % 64);
+                }
+            }
+            self.0.membership.set(Some(words));
+            words
+        });
+        (membership[index / 64] & (1u64 << (index % 64))) != 0
     }
 
     fn canonicalized_tail(&self, ordered_prefix: usize) -> Self {
@@ -111,6 +132,7 @@ impl DerefMut for PersistentLibrary {
     fn deref_mut(&mut self) -> &mut Self::Target {
         let storage = Rc::make_mut(&mut self.0);
         storage.hash.set(None);
+        storage.membership.set(None);
         for cached in &mut storage.canonical {
             cached.take();
         }
@@ -947,7 +969,7 @@ impl FastState {
     }
 
     fn has_library_card(&self, card: Option<CardId>) -> bool {
-        card.is_some_and(|id| self.library.iter().any(|candidate| *candidate == id))
+        card.is_some_and(|id| self.library.contains_card(id))
     }
 
     fn remove_hand_card(&mut self, card: CardId) -> bool {
@@ -1161,34 +1183,97 @@ fn generate_fast_actions_with_config(
 ) -> Vec<FastAction> {
     let mut actions = Vec::new();
     generate_fast_mana_actions(ctx, &mut actions, state);
-    generate_fast_engine_actions(ctx, &mut actions, state);
-    generate_fast_commander_actions(ctx, &mut actions, state);
-    generate_fast_land_actions(ctx, &mut actions, state);
-    generate_fast_zero_artifact_actions(ctx, &mut actions, state);
-    generate_fast_chrome_mox_actions(ctx, &mut actions, state);
-    generate_fast_mox_diamond_actions(ctx, &mut actions, state);
-    generate_fast_artifact_spell_actions(ctx, &mut actions, state);
-    generate_fast_creature_actions(ctx, &mut actions, state);
-    generate_fast_mantle_equip_actions(ctx, &mut actions, state);
-    generate_fast_spirit_guide_actions(ctx, &mut actions, state);
-    generate_fast_ritual_actions(ctx, &mut actions, state);
-    generate_fast_manamorphose_actions(ctx, &mut actions, state);
-    generate_fast_rain_actions(ctx, &mut actions, state);
-    generate_fast_sac_spell_actions(ctx, &mut actions, state);
-    generate_fast_offer_actions(ctx, &mut actions, state);
-    generate_fast_noxious_actions(ctx, &mut actions, state);
-    generate_fast_summoners_pact_actions(ctx, &mut actions, state);
-    generate_fast_green_sun_actions(ctx, &mut actions, state);
-    generate_fast_ranger_captain_actions(ctx, &mut actions, state);
-    generate_fast_eldritch_evolution_actions(ctx, &mut actions, state);
-    generate_fast_neoform_actions(ctx, &mut actions, state);
-    generate_fast_crop_rotation_actions(ctx, &mut actions, state);
-    generate_fast_hand_tutor_actions(ctx, &mut actions, state);
-    generate_fast_beseech_actions(ctx, &mut actions, state);
-    generate_fast_top_tutor_actions(ctx, &mut actions, state);
-    generate_fast_wishclaw_actions(ctx, &mut actions, state);
-    generate_fast_gamble_actions(ctx, &mut actions, state, config);
+    generate_fast_strategic_actions_with_config(ctx, &mut actions, state, config);
     actions
+}
+
+fn generate_fast_strategic_actions_with_config(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+    config: &FastSearchConfig,
+) {
+    let hand_templates = state
+        .hand
+        .iter()
+        .fold(ActionTemplateMask::default(), |templates, card| {
+            templates.union(ctx.card_spec(*card).action_templates)
+        });
+    if hand_templates.contains(ActionTemplateMask::ENGINE) {
+        generate_fast_engine_actions(ctx, actions, state);
+    }
+    generate_fast_commander_actions(ctx, actions, state);
+    if hand_templates.contains(ActionTemplateMask::LAND) {
+        generate_fast_land_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::ZERO_ARTIFACT) {
+        generate_fast_zero_artifact_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::CHROME_MOX) {
+        generate_fast_chrome_mox_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::MOX_DIAMOND) {
+        generate_fast_mox_diamond_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::ARTIFACT_SPELL) {
+        generate_fast_artifact_spell_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::CREATURE) {
+        generate_fast_creature_actions(ctx, actions, state);
+    }
+    generate_fast_mantle_equip_actions(ctx, actions, state);
+    if hand_templates.contains(ActionTemplateMask::SPIRIT_GUIDE) {
+        generate_fast_spirit_guide_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::RITUAL) {
+        generate_fast_ritual_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::MANAMORPHOSE) {
+        generate_fast_manamorphose_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::RAIN) {
+        generate_fast_rain_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::SACRIFICE_RITUAL) {
+        generate_fast_sac_spell_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::OFFER) {
+        generate_fast_offer_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::NOXIOUS) {
+        generate_fast_noxious_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::SUMMONERS_PACT) {
+        generate_fast_summoners_pact_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::GREEN_SUN) {
+        generate_fast_green_sun_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::RANGER_CAPTAIN) {
+        generate_fast_ranger_captain_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::ELDRITCH_EVOLUTION) {
+        generate_fast_eldritch_evolution_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::NEOFORM) {
+        generate_fast_neoform_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::CROP_ROTATION) {
+        generate_fast_crop_rotation_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::HAND_TUTOR) {
+        generate_fast_hand_tutor_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::BESEECH) {
+        generate_fast_beseech_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::TOP_TUTOR) {
+        generate_fast_top_tutor_actions(ctx, actions, state);
+    }
+    generate_fast_wishclaw_actions(ctx, actions, state);
+    if hand_templates.contains(ActionTemplateMask::GAMBLE) {
+        generate_fast_gamble_actions(ctx, actions, state, config);
+    }
 }
 
 fn generate_fast_mana_actions(
@@ -2126,7 +2211,7 @@ fn generate_fast_crop_rotation_actions(
                 let Some(target) = ctx.card_id(target_name) else {
                     continue;
                 };
-                if !state.library.iter().any(|card| *card == target) {
+                if !state.library.contains_card(target) {
                     continue;
                 }
                 let target_removed_library = remove_first_card_vec(&state.library, target);
@@ -2719,7 +2804,7 @@ fn led_target_state_fast(
     target: CardId,
     mana: Mana,
 ) -> Option<FastState> {
-    if !state.library.iter().any(|card| *card == target) {
+    if !state.library.contains_card(target) {
         return None;
     }
     if let Some((cost, target_mask, perm)) = engine_native_fast(ctx, target) {
@@ -3069,9 +3154,9 @@ fn tutor_targets_fast(ctx: &FastContext, tutor: &str, state: &FastState) -> Vec<
         ]
         .iter()
         .filter_map(|name| ctx.card_id(name))
-        .filter(|target| state.library.iter().any(|card| card == target))
+        .filter(|target| state.library.contains_card(*target))
         .collect();
-        candidates.sort_by_key(|target| engine_target_priority_name(ctx.card_name(*target)));
+        sort_engine_targets(ctx, &mut candidates);
         return candidates;
     }
     if tutor == "Mystical Tutor" {
@@ -3101,15 +3186,15 @@ fn tutor_targets_fast(ctx: &FastContext, tutor: &str, state: &FastState) -> Vec<
         ]
         .iter()
         .filter_map(|name| ctx.card_id(name))
-        .filter(|target| state.library.iter().any(|card| card == target))
+        .filter(|target| state.library.contains_card(*target))
         .collect();
-        candidates.sort_by_key(|target| engine_target_priority_name(ctx.card_name(*target)));
+        sort_engine_targets(ctx, &mut candidates);
         return candidates;
     }
     if tutor == "Enlightened Tutor" || tutor == "Idyllic Tutor" {
         return ctx
             .card_id("Rhystic Study")
-            .filter(|target| state.library.iter().any(|card| card == target))
+            .filter(|target| state.library.contains_card(*target))
             .into_iter()
             .collect();
     }
@@ -3125,17 +3210,17 @@ fn tutor_targets_fast(ctx: &FastContext, tutor: &str, state: &FastState) -> Vec<
         ]
         .iter()
         .filter_map(|name| ctx.card_id(name))
-        .filter(|target| state.library.iter().any(|card| card == target))
+        .filter(|target| state.library.contains_card(*target))
         .collect();
-        candidates.sort_by_key(|target| engine_target_priority_name(ctx.card_name(*target)));
+        sort_engine_targets(ctx, &mut candidates);
         return candidates;
     }
     let mut candidates: Vec<CardId> = ["Rhystic Study", "Heartwood Storyteller"]
         .iter()
         .filter_map(|name| ctx.card_id(name))
-        .filter(|target| state.library.iter().any(|card| card == target))
+        .filter(|target| state.library.contains_card(*target))
         .collect();
-    candidates.sort_by_key(|target| engine_target_priority_name(ctx.card_name(*target)));
+    sort_engine_targets(ctx, &mut candidates);
     candidates
 }
 
@@ -3204,8 +3289,8 @@ fn offer_counterable_costs(card: &str) -> Vec<Cost> {
     }
 }
 
-fn engine_target_priority_name(target: &str) -> (u8, String) {
-    let priority = match target {
+fn engine_target_priority_rank(target: &str) -> u8 {
+    match target {
         "Rhystic Study" => 0,
         "Heartwood Storyteller" => 1,
         "Mystic Remora" => 2,
@@ -3244,8 +3329,15 @@ fn engine_target_priority_name(target: &str) -> (u8, String) {
         "Paradise Mantle" => 35,
         "Manamorphose" => 36,
         _ => 50,
-    };
-    (priority, target.to_string())
+    }
+}
+
+fn sort_engine_targets(ctx: &FastContext, targets: &mut [CardId]) {
+    targets.sort_unstable_by(|left, right| {
+        engine_target_priority_rank(ctx.card_name(*left))
+            .cmp(&engine_target_priority_rank(ctx.card_name(*right)))
+            .then_with(|| ctx.card_name(*left).cmp(ctx.card_name(*right)))
+    });
 }
 
 fn label_priority_name(label: &str) -> i32 {
@@ -4264,11 +4356,19 @@ fn selected_trace_target_name(
 ) -> Option<String> {
     if !added_hand_names.is_empty() {
         let mut candidates = added_hand_names.to_vec();
-        candidates.sort_by_key(|name| engine_target_priority_name(name));
+        candidates.sort_unstable_by(|left, right| {
+            engine_target_priority_rank(left)
+                .cmp(&engine_target_priority_rank(right))
+                .then_with(|| left.cmp(right))
+        });
         return candidates.into_iter().next();
     }
     let mut library_names = card_names_for_trace(ctx, removed_library);
-    library_names.sort_by_key(|name| engine_target_priority_name(name));
+    library_names.sort_unstable_by(|left, right| {
+        engine_target_priority_rank(left)
+            .cmp(&engine_target_priority_rank(right))
+            .then_with(|| left.cmp(right))
+    });
     library_names.into_iter().next()
 }
 
@@ -4467,7 +4567,7 @@ fn engine_success_label_fast(
             "Rhystic Study" | "Heartwood Storyteller" | "Smothering Tithe"
         ) && turn <= 2
         {
-            candidates.push((engine_target_priority_name(name).0, turn, name.to_string()));
+            candidates.push((engine_target_priority_rank(name), turn, name.to_string()));
         }
     }
     for item in &state.engine_names {
@@ -4479,7 +4579,7 @@ fn engine_success_label_fast(
             && turn == 1
             && can_keep_remora_fast(ctx, request, state, request.remora_upkeep_payments)
         {
-            candidates.push((engine_target_priority_name(name).0, turn, name.to_string()));
+            candidates.push((engine_target_priority_rank(name), turn, name.to_string()));
         }
     }
     candidates.into_iter().min().map(|(_, _, name)| name)
@@ -4490,9 +4590,9 @@ fn best_engine_name_fast(ctx: &FastContext, state: &FastState) -> Option<String>
     for item in &state.engine_names {
         let item_text = ctx.interned_string(*item);
         if let Some((name, turn)) = parse_engine_name_turn(item_text) {
-            candidates.push((engine_target_priority_name(name).0, turn, name.to_string()));
+            candidates.push((engine_target_priority_rank(name), turn, name.to_string()));
         } else if let Some((name, _turn_text)) = item_text.rsplit_once('@') {
-            candidates.push((engine_target_priority_name(name).0, 99, name.to_string()));
+            candidates.push((engine_target_priority_rank(name), 99, name.to_string()));
         }
     }
     candidates.into_iter().min().map(|(_, _, name)| name)
@@ -8971,6 +9071,39 @@ fn hash_value<T: Hash>(value: &T) -> u64 {
 mod tests {
     use super::*;
 
+    fn generate_all_legacy_groups(ctx: &mut FastContext, state: &FastState) -> Vec<FastAction> {
+        let mut actions = Vec::new();
+        generate_fast_mana_actions(ctx, &mut actions, state);
+        generate_fast_engine_actions(ctx, &mut actions, state);
+        generate_fast_commander_actions(ctx, &mut actions, state);
+        generate_fast_land_actions(ctx, &mut actions, state);
+        generate_fast_zero_artifact_actions(ctx, &mut actions, state);
+        generate_fast_chrome_mox_actions(ctx, &mut actions, state);
+        generate_fast_mox_diamond_actions(ctx, &mut actions, state);
+        generate_fast_artifact_spell_actions(ctx, &mut actions, state);
+        generate_fast_creature_actions(ctx, &mut actions, state);
+        generate_fast_mantle_equip_actions(ctx, &mut actions, state);
+        generate_fast_spirit_guide_actions(ctx, &mut actions, state);
+        generate_fast_ritual_actions(ctx, &mut actions, state);
+        generate_fast_manamorphose_actions(ctx, &mut actions, state);
+        generate_fast_rain_actions(ctx, &mut actions, state);
+        generate_fast_sac_spell_actions(ctx, &mut actions, state);
+        generate_fast_offer_actions(ctx, &mut actions, state);
+        generate_fast_noxious_actions(ctx, &mut actions, state);
+        generate_fast_summoners_pact_actions(ctx, &mut actions, state);
+        generate_fast_green_sun_actions(ctx, &mut actions, state);
+        generate_fast_ranger_captain_actions(ctx, &mut actions, state);
+        generate_fast_eldritch_evolution_actions(ctx, &mut actions, state);
+        generate_fast_neoform_actions(ctx, &mut actions, state);
+        generate_fast_crop_rotation_actions(ctx, &mut actions, state);
+        generate_fast_hand_tutor_actions(ctx, &mut actions, state);
+        generate_fast_beseech_actions(ctx, &mut actions, state);
+        generate_fast_top_tutor_actions(ctx, &mut actions, state);
+        generate_fast_wishclaw_actions(ctx, &mut actions, state);
+        generate_fast_gamble_actions(ctx, &mut actions, state, &FastSearchConfig::default());
+        actions
+    }
+
     fn fixture_state(battlefield: Vec<FixturePerm>) -> FixtureState {
         FixtureState {
             battlefield,
@@ -9038,13 +9171,18 @@ mod tests {
 
     #[test]
     fn persistent_library_clones_share_until_mutated() {
-        let library = PersistentLibrary::from(vec![1, 2, 3, 4]);
+        let library = PersistentLibrary::from(vec![1, 2, 3, 4, 300]);
         let mut clone = library.clone();
         assert!(library.is_shared_with(&clone));
+        assert!(library.contains_card(1));
+        assert!(library.contains_card(300));
         assert_eq!(clone.remove(0), 1);
         assert!(!library.is_shared_with(&clone));
-        assert_eq!(&*library, &[1, 2, 3, 4]);
-        assert_eq!(&*clone, &[2, 3, 4]);
+        assert!(library.contains_card(1));
+        assert!(!clone.contains_card(1));
+        assert!(clone.contains_card(300));
+        assert_eq!(&*library, &[1, 2, 3, 4, 300]);
+        assert_eq!(&*clone, &[2, 3, 4, 300]);
     }
 
     #[test]
@@ -9053,5 +9191,73 @@ mod tests {
         let context = FastContext::with_card_names(&names);
         assert_eq!(context.card_count(), 140);
         assert_eq!(context.card_specs.len(), 140);
+    }
+
+    #[test]
+    fn action_priorities_preserve_legacy_classes() {
+        for name in [
+            "Rhystic Study",
+            "Demonic Tutor",
+            "Vampiric Tutor",
+            "Wishclaw Talisman",
+            "Heartwood Storyteller",
+            "Ranger-Captain of Eos",
+        ] {
+            assert_eq!(label_priority_name(name), ENGINE_TUTOR_PRIORITY, "{name}");
+        }
+        for name in [
+            "Arcane Signet",
+            "Lion's Eye Diamond",
+            "Lotus Petal",
+            "Mox Diamond",
+            "Springleaf Drum",
+        ] {
+            assert_eq!(label_priority_name(name), FAST_MANA_PRIORITY, "{name}");
+        }
+        for name in ["Diabolic Intent", "Imperial Seal", "Birds of Paradise"] {
+            assert_eq!(label_priority_name(name), DEFAULT_PRIORITY, "{name}");
+        }
+    }
+
+    #[test]
+    fn registry_dispatch_matches_all_legacy_generators_on_parity_corpus() {
+        let payload: ActionFixturePayload = serde_json::from_str(include_str!(
+            "../../../fixtures/parity/action_fixtures_pass48_20260703.json"
+        ))
+        .expect("action parity fixture");
+        let mut names = Vec::new();
+        for fixture in &payload.fixtures {
+            names.extend(fixture.state.hand.iter().cloned());
+            names.extend(fixture.state.library.iter().cloned());
+        }
+        let mut context = FastContext::with_card_names(names);
+        for fixture in &payload.fixtures {
+            let state = FastState::from_fixture(&mut context, &fixture.state);
+            let expected = generate_all_legacy_groups(&mut context, &state);
+            let generated = generate_fast_actions(&mut context, &state);
+            assert_eq!(
+                expected.len(),
+                generated.len(),
+                "fixture {}",
+                fixture.fixture_index
+            );
+            for (index, (left, right)) in expected.iter().zip(&generated).enumerate() {
+                assert_eq!(
+                    left.priority, right.priority,
+                    "fixture {} action {index}",
+                    fixture.fixture_index
+                );
+                assert_eq!(
+                    left.is_ragavan_attack, right.is_ragavan_attack,
+                    "fixture {} action {index}",
+                    fixture.fixture_index
+                );
+                assert_eq!(
+                    left.next_state, right.next_state,
+                    "fixture {} action {index}",
+                    fixture.fixture_index
+                );
+            }
+        }
     }
 }

@@ -41,12 +41,56 @@ pub enum ActionClass {
     Value,
 }
 
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ActionTemplateMask(u32);
+
+impl ActionTemplateMask {
+    pub const ENGINE: Self = Self(1 << 0);
+    pub const LAND: Self = Self(1 << 1);
+    pub const ZERO_ARTIFACT: Self = Self(1 << 2);
+    pub const CHROME_MOX: Self = Self(1 << 3);
+    pub const MOX_DIAMOND: Self = Self(1 << 4);
+    pub const ARTIFACT_SPELL: Self = Self(1 << 5);
+    pub const CREATURE: Self = Self(1 << 6);
+    pub const SPIRIT_GUIDE: Self = Self(1 << 7);
+    pub const RITUAL: Self = Self(1 << 8);
+    pub const MANAMORPHOSE: Self = Self(1 << 9);
+    pub const RAIN: Self = Self(1 << 10);
+    pub const SACRIFICE_RITUAL: Self = Self(1 << 11);
+    pub const OFFER: Self = Self(1 << 12);
+    pub const NOXIOUS: Self = Self(1 << 13);
+    pub const SUMMONERS_PACT: Self = Self(1 << 14);
+    pub const GREEN_SUN: Self = Self(1 << 15);
+    pub const RANGER_CAPTAIN: Self = Self(1 << 16);
+    pub const ELDRITCH_EVOLUTION: Self = Self(1 << 17);
+    pub const NEOFORM: Self = Self(1 << 18);
+    pub const CROP_ROTATION: Self = Self(1 << 19);
+    pub const HAND_TUTOR: Self = Self(1 << 20);
+    pub const BESEECH: Self = Self(1 << 21);
+    pub const TOP_TUTOR: Self = Self(1 << 22);
+    pub const GAMBLE: Self = Self(1 << 23);
+
+    pub const fn contains(self, template: Self) -> bool {
+        (self.0 & template.0) != 0
+    }
+
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    fn insert(&mut self, template: Self) {
+        self.0 |= template.0;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CardMetadata {
     pub name: Box<str>,
     pub color_mask: u8,
     pub flags: CardFlags,
     pub action_class: ActionClass,
+    pub action_templates: ActionTemplateMask,
 }
 
 impl CardMetadata {
@@ -57,6 +101,7 @@ impl CardMetadata {
             color_mask: card_color_mask(name),
             flags,
             action_class: action_class(flags),
+            action_templates: action_templates(name, flags),
         }
     }
 }
@@ -68,6 +113,7 @@ pub struct CardSpec {
     pub color_mask: u8,
     pub flags: CardFlags,
     pub action_class: ActionClass,
+    pub action_templates: ActionTemplateMask,
     pub semantic_class: u8,
 }
 
@@ -80,6 +126,7 @@ impl CardSpec {
             color_mask: metadata.color_mask,
             flags: metadata.flags,
             action_class: metadata.action_class,
+            action_templates: metadata.action_templates,
             // Classes remain exact until an equivalence proof supplies a coarser partition.
             semantic_class: slot,
         }
@@ -132,6 +179,60 @@ fn action_class(flags: CardFlags) -> ActionClass {
     } else {
         ActionClass::Value
     }
+}
+
+fn action_templates(name: &str, flags: CardFlags) -> ActionTemplateMask {
+    let mut templates = ActionTemplateMask::default();
+    if flags.contains(CardFlags::LAND) || flags.contains(CardFlags::MDFC_LAND) {
+        templates.insert(ActionTemplateMask::LAND);
+    }
+    match name {
+        "Rhystic Study" | "Heartwood Storyteller" => templates.insert(ActionTemplateMask::ENGINE),
+        "Lotus Petal" | "Lion's Eye Diamond" | "Mox Amber" | "Mox Opal" | "Paradise Mantle" => {
+            templates.insert(ActionTemplateMask::ZERO_ARTIFACT)
+        }
+        "Chrome Mox" => templates.insert(ActionTemplateMask::CHROME_MOX),
+        "Mox Diamond" => templates.insert(ActionTemplateMask::MOX_DIAMOND),
+        "Sol Ring" | "Mana Vault" | "Arcane Signet" | "Relic of Legends" | "Wishclaw Talisman"
+        | "Springleaf Drum" => templates.insert(ActionTemplateMask::ARTIFACT_SPELL),
+        "Birds of Paradise"
+        | "Deathrite Shaman"
+        | "Esper Sentinel"
+        | "Faerie Mastermind"
+        | "Ignoble Hierarch"
+        | "Lotho, Corrupt Shirriff"
+        | "Noble Hierarch"
+        | "Orcish Bowmasters"
+        | "Ragavan, Nimble Pilferer"
+        | "The Cabbage Merchant"
+        | "Tinder Wall"
+        | "Valley Floodcaller"
+        | "Wild Cantor" => templates.insert(ActionTemplateMask::CREATURE),
+        "Simian Spirit Guide" | "Elvish Spirit Guide" => {
+            templates.insert(ActionTemplateMask::SPIRIT_GUIDE)
+        }
+        "Dark Ritual" | "Rite of Flame" => templates.insert(ActionTemplateMask::RITUAL),
+        "Manamorphose" => templates.insert(ActionTemplateMask::MANAMORPHOSE),
+        "Rain of Filth" => templates.insert(ActionTemplateMask::RAIN),
+        "Culling the Weak" => templates.insert(ActionTemplateMask::SACRIFICE_RITUAL),
+        "An Offer You Can't Refuse" => templates.insert(ActionTemplateMask::OFFER),
+        "Noxious Revival" => templates.insert(ActionTemplateMask::NOXIOUS),
+        "Summoner's Pact" => templates.insert(ActionTemplateMask::SUMMONERS_PACT),
+        "Green Sun's Zenith" => templates.insert(ActionTemplateMask::GREEN_SUN),
+        "Ranger-Captain of Eos" => templates.insert(ActionTemplateMask::RANGER_CAPTAIN),
+        "Eldritch Evolution" => templates.insert(ActionTemplateMask::ELDRITCH_EVOLUTION),
+        "Neoform" => templates.insert(ActionTemplateMask::NEOFORM),
+        "Crop Rotation" => templates.insert(ActionTemplateMask::CROP_ROTATION),
+        "Demonic Tutor" | "Diabolic Intent" | "Grim Tutor" | "Idyllic Tutor" => {
+            templates.insert(ActionTemplateMask::HAND_TUTOR)
+        }
+        "Beseech the Mirror" => templates.insert(ActionTemplateMask::BESEECH),
+        "Enlightened Tutor" | "Imperial Seal" | "Mystical Tutor" | "Scheming Symmetry"
+        | "Vampiric Tutor" | "Worldly Tutor" => templates.insert(ActionTemplateMask::TOP_TUTOR),
+        "Gamble" => templates.insert(ActionTemplateMask::GAMBLE),
+        _ => {}
+    }
+    templates
 }
 
 #[derive(Debug, Clone)]

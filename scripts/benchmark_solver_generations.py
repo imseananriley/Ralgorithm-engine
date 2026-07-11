@@ -273,7 +273,7 @@ def wilson95(successes: int, games: int) -> list[float]:
 
 def policy_game_outcomes(response: dict[str, Any]) -> list[tuple[Any, ...]]:
     records = response.get("game_records") or []
-    return [
+    outcomes = [
         (
             record.get("game_index"),
             bool(record.get("hit")),
@@ -285,6 +285,8 @@ def policy_game_outcomes(response: dict[str, Any]) -> list[tuple[Any, ...]]:
         )
         for record in records
     ]
+    outcomes.sort(key=lambda row: row[0])
+    return outcomes
 
 
 def main() -> int:
