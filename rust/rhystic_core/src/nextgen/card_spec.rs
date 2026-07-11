@@ -5,6 +5,7 @@ use super::{CardMask, SlotId, MAX_DECK_SLOTS};
 use crate::fast_engine::{
     card_color_mask, is_artifact_card_name, is_fetch_name, is_land_card_name, is_mdfc_land_name,
 };
+use crate::Cost;
 
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -91,6 +92,7 @@ pub struct CardMetadata {
     pub flags: CardFlags,
     pub action_class: ActionClass,
     pub action_templates: ActionTemplateMask,
+    pub payment_gate_costs: [Option<Cost>; 2],
 }
 
 impl CardMetadata {
@@ -102,6 +104,7 @@ impl CardMetadata {
             flags,
             action_class: action_class(flags),
             action_templates: action_templates(name, flags),
+            payment_gate_costs: payment_gate_costs(name),
         }
     }
 }
@@ -114,6 +117,7 @@ pub struct CardSpec {
     pub flags: CardFlags,
     pub action_class: ActionClass,
     pub action_templates: ActionTemplateMask,
+    pub payment_gate_costs: [Option<Cost>; 2],
     pub semantic_class: u8,
 }
 
@@ -127,6 +131,7 @@ impl CardSpec {
             flags: metadata.flags,
             action_class: metadata.action_class,
             action_templates: metadata.action_templates,
+            payment_gate_costs: metadata.payment_gate_costs,
             // Classes remain exact until an equivalence proof supplies a coarser partition.
             semantic_class: slot,
         }
@@ -233,6 +238,50 @@ fn action_templates(name: &str, flags: CardFlags) -> ActionTemplateMask {
         _ => {}
     }
     templates
+}
+
+fn payment_gate_costs(name: &str) -> [Option<Cost>; 2] {
+    let (first, second) = match name {
+        "Rhystic Study" => ([2, 0, 0, 1, 0, 0], None),
+        "Heartwood Storyteller" => ([1, 0, 0, 0, 0, 2], None),
+        "Sol Ring" | "Mana Vault" | "Springleaf Drum" => ([1, 0, 0, 0, 0, 0], None),
+        "Arcane Signet" | "Relic of Legends" => ([2, 0, 0, 0, 0, 0], None),
+        "Wishclaw Talisman" => ([1, 1, 0, 0, 0, 0], None),
+        "Birds of Paradise" | "Ignoble Hierarch" | "Noble Hierarch" | "Tinder Wall" => {
+            ([0, 0, 0, 0, 0, 1], None)
+        }
+        "Deathrite Shaman" => ([0, 1, 0, 0, 0, 0], Some([0, 0, 0, 0, 0, 1])),
+        "Esper Sentinel" => ([0, 0, 0, 0, 1, 0], None),
+        "Faerie Mastermind" => ([1, 0, 0, 1, 0, 0], None),
+        "Lotho, Corrupt Shirriff" => ([0, 1, 0, 0, 1, 0], None),
+        "Orcish Bowmasters" => ([1, 1, 0, 0, 0, 0], None),
+        "Ragavan, Nimble Pilferer" => ([0, 0, 1, 0, 0, 0], None),
+        "The Cabbage Merchant" => ([2, 0, 0, 0, 0, 1], None),
+        "Valley Floodcaller" => ([2, 0, 0, 1, 0, 0], None),
+        "Wild Cantor" => ([0, 0, 1, 0, 0, 0], Some([0, 0, 0, 0, 0, 1])),
+        "Dark Ritual" => ([0, 1, 0, 0, 0, 0], None),
+        "Rite of Flame" | "Gamble" => ([0, 0, 1, 0, 0, 0], None),
+        "Manamorphose" => ([1, 0, 1, 0, 0, 1], None),
+        "Rain of Filth" | "Culling the Weak" => ([0, 1, 0, 0, 0, 0], None),
+        // The bait spell adds cost; U is a safe lower bound for pruning.
+        "An Offer You Can't Refuse" => ([0, 0, 0, 1, 0, 0], None),
+        // One-mana green targets are the cheapest supported GSZ line.
+        "Green Sun's Zenith" => ([1, 0, 0, 0, 0, 1], None),
+        "Ranger-Captain of Eos" => ([1, 0, 0, 0, 2, 0], None),
+        "Eldritch Evolution" => ([1, 0, 0, 0, 0, 2], None),
+        "Neoform" => ([0, 0, 0, 1, 0, 1], None),
+        "Crop Rotation" => ([0, 0, 0, 0, 0, 1], None),
+        "Demonic Tutor" | "Diabolic Intent" => ([1, 1, 0, 0, 0, 0], None),
+        "Grim Tutor" => ([1, 2, 0, 0, 0, 0], None),
+        "Idyllic Tutor" => ([2, 0, 0, 0, 1, 0], None),
+        "Beseech the Mirror" => ([1, 3, 0, 0, 0, 0], None),
+        "Enlightened Tutor" => ([0, 0, 0, 0, 1, 0], None),
+        "Imperial Seal" | "Scheming Symmetry" | "Vampiric Tutor" => ([0, 1, 0, 0, 0, 0], None),
+        "Mystical Tutor" => ([0, 0, 0, 1, 0, 0], None),
+        "Worldly Tutor" => ([0, 0, 0, 0, 0, 1], None),
+        _ => return [None, None],
+    };
+    [Some(first), second]
 }
 
 #[derive(Debug, Clone)]

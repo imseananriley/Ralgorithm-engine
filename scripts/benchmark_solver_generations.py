@@ -30,6 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hands", type=int, default=100)
     parser.add_argument("--policy-games", type=int, default=50)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--cooldown-seconds", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=2026071101)
     parser.add_argument("--state-limit", type=int, default=20_000)
     parser.add_argument("--actual-rerun-state-limit", type=int, default=60_000)
@@ -169,6 +170,7 @@ def timed_pair(
     command: str,
     payload: Any,
     repeats: int,
+    cooldown_seconds: float,
 ) -> tuple[list[float], Any, list[float], Any]:
     _, baseline_expected = invoke(baseline_bin, command, payload)
     _, candidate_expected = invoke(candidate_bin, command, payload)
@@ -183,6 +185,8 @@ def timed_pair(
                   (baseline_bin, baseline_elapsed, baseline_expected)]
         )
         for binary, elapsed, expected in order:
+            if cooldown_seconds > 0.0:
+                time.sleep(cooldown_seconds)
             seconds, response = invoke(binary, command, payload)
             if response != expected:
                 raise RuntimeError(f"non-deterministic response from {binary} {command}")
@@ -293,6 +297,8 @@ def main() -> int:
     args = parse_args()
     if args.hands <= 0 or args.policy_games <= 0 or args.repeats <= 0:
         raise ValueError("--hands, --policy-games, and --repeats must be positive")
+    if args.cooldown_seconds < 0.0:
+        raise ValueError("--cooldown-seconds must be non-negative")
     baseline_bin = resolve(args.baseline_bin)
     candidate_bin = resolve(args.candidate_bin)
     for binary in [baseline_bin, candidate_bin]:
@@ -312,6 +318,7 @@ def main() -> int:
         "solve-keep-fast-batch-jsonl",
         fixed_payload,
         args.repeats,
+        args.cooldown_seconds,
     )
 
     policy_payload = policy_request(
@@ -332,6 +339,7 @@ def main() -> int:
         "policy-eval-fast-jsonl",
         policy_payload,
         args.repeats,
+        args.cooldown_seconds,
     )
     for name, response in [
         ("baseline", baseline_policy),
