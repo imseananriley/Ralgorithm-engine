@@ -48,6 +48,15 @@ mod tests {
     }
 
     #[test]
+    fn manamorphose_payment_search_matches_supported_hybrid_costs() {
+        let deck = DeckSpec::compile(&["Manamorphose".to_string()]).expect("valid card registry");
+        assert_eq!(
+            deck.cards()[0].payment_gate_costs,
+            [Some([1, 0, 1, 0, 0, 0]), Some([1, 0, 0, 0, 0, 1])]
+        );
+    }
+
+    #[test]
     fn library_exposes_only_known_top_or_uniform_unknown_draws() {
         let mut library = PackedLibrary::new([2, 7, 11].into_iter().collect());
         let unknown = library.chance_draws();

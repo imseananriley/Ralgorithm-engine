@@ -245,7 +245,8 @@ fn payment_gate_costs(name: &str) -> [Option<Cost>; 2] {
         "Rhystic Study" => ([2, 0, 0, 1, 0, 0], None),
         "Heartwood Storyteller" => ([1, 0, 0, 0, 0, 2], None),
         "Sol Ring" | "Mana Vault" | "Springleaf Drum" => ([1, 0, 0, 0, 0, 0], None),
-        "Arcane Signet" | "Relic of Legends" => ([2, 0, 0, 0, 0, 0], None),
+        "Arcane Signet" => ([2, 0, 0, 0, 0, 0], None),
+        "Relic of Legends" => ([3, 0, 0, 0, 0, 0], None),
         "Wishclaw Talisman" => ([1, 1, 0, 0, 0, 0], None),
         "Birds of Paradise" | "Ignoble Hierarch" | "Noble Hierarch" | "Tinder Wall" => {
             ([0, 0, 0, 0, 0, 1], None)
@@ -261,12 +262,12 @@ fn payment_gate_costs(name: &str) -> [Option<Cost>; 2] {
         "Wild Cantor" => ([0, 0, 1, 0, 0, 0], Some([0, 0, 0, 0, 0, 1])),
         "Dark Ritual" => ([0, 1, 0, 0, 0, 0], None),
         "Rite of Flame" | "Gamble" => ([0, 0, 1, 0, 0, 0], None),
-        "Manamorphose" => ([1, 0, 1, 0, 0, 1], None),
+        "Manamorphose" => ([1, 0, 1, 0, 0, 0], Some([1, 0, 0, 0, 0, 1])),
         "Rain of Filth" | "Culling the Weak" => ([0, 1, 0, 0, 0, 0], None),
         // The bait spell adds cost; U is a safe lower bound for pruning.
         "An Offer You Can't Refuse" => ([0, 0, 0, 1, 0, 0], None),
         // One-mana green targets are the cheapest supported GSZ line.
-        "Green Sun's Zenith" => ([1, 0, 0, 0, 0, 1], None),
+        "Green Sun's Zenith" => ([1, 0, 0, 0, 0, 1], Some([3, 0, 0, 0, 0, 1])),
         "Ranger-Captain of Eos" => ([1, 0, 0, 0, 2, 0], None),
         "Eldritch Evolution" => ([1, 0, 0, 0, 0, 2], None),
         "Neoform" => ([0, 0, 0, 1, 0, 1], None),

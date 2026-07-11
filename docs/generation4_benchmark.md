@@ -26,7 +26,7 @@ The earlier non-cooled three-repeat policy result drifted as the machine heated 
 
 ## Payment-Directed Research Path
 
-`RALGORITHM_PAYMENT_DIRECTED=1` computes a Pareto-pruned closure of existing mana transitions, emits free setup actions once, and tests only payable costed actions across the closure. Compiled card metadata stores up to two conservative colored-cost lower bounds for early rejection; authoritative spell resolution still uses the existing card-specific generators.
+`RALGORITHM_PAYMENT_DIRECTED=generic` computes a Pareto-pruned closure of existing mana transitions, emits free setup actions once, and tests only payable costed actions across the closure. Compiled card metadata stores up to two conservative colored-cost lower bounds for early rejection; authoritative spell resolution still uses the existing card-specific generators.
 
 On a 100-fixed-hand calibration, this path increased successes from 31 to 33 and reduced caps from 10 to 5. The six discordances were all baseline caps; the candidate found two legal wins and exhausted four failures. A separately traced policy line confirmed one newly recognized turn-two Rhystic sequence through Enlightened Tutor, Elvish Spirit Guide, Green Sun's Zenith, and Tinder Wall.
 

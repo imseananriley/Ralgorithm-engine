@@ -10,7 +10,7 @@ use rhystic_core::{
         earliest_fast, evaluate_policy_fast, evaluate_policy_threshold_sweep_fast,
         evaluate_raw_delta_fast, evaluate_raw_delta_fast_streaming,
         evaluate_visible_hand_batch_fast, simulate_policy_fast, solve_keep_batch_fast,
-        solve_keep_fast,
+        solve_keep_fast, solve_keep_trace_fast,
     },
     fnv1a_seed, generate_fixture_action_cores, generate_fixture_actions, mana_bench_cases,
     mana_checksum,
@@ -31,7 +31,7 @@ fn parse_u8_arg(args: &[String], index: usize, name: &str) -> u8 {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("usage: rhystic-core-smoke <seed|bottom-count|pay-count|bench-mana|bench-nextgen|bench-fast-state|bench-fast-actions|verify-actions|expand-actions-jsonl|expand-actions-fast-jsonl|close-turn-jsonl|close-turn-fast-jsonl|solve-keep-jsonl|solve-keep-fast-jsonl|solve-keep-fast-batch-jsonl|earliest-fast-jsonl|visible-hand-fast-batch-jsonl|policy-eval-fast-jsonl|policy-threshold-sweep-fast-jsonl|policy-sim-fast-jsonl|raw-delta-fast-jsonl|raw-delta-fast-stream-jsonl|rng-shuffle-audit-jsonl> [args...]");
+        eprintln!("usage: rhystic-core-smoke <seed|bottom-count|pay-count|bench-mana|bench-nextgen|bench-fast-state|bench-fast-actions|verify-actions|expand-actions-jsonl|expand-actions-fast-jsonl|close-turn-jsonl|close-turn-fast-jsonl|solve-keep-jsonl|solve-keep-fast-jsonl|solve-keep-trace-fast-jsonl|solve-keep-fast-batch-jsonl|earliest-fast-jsonl|visible-hand-fast-batch-jsonl|policy-eval-fast-jsonl|policy-threshold-sweep-fast-jsonl|policy-sim-fast-jsonl|raw-delta-fast-jsonl|raw-delta-fast-stream-jsonl|rng-shuffle-audit-jsonl> [args...]");
         std::process::exit(2);
     }
     match args[1].as_str() {
@@ -366,6 +366,36 @@ fn main() {
                 stdout
                     .flush()
                     .expect("failed to flush fast solve-keep JSONL output");
+            }
+        }
+        "solve-keep-trace-fast-jsonl" => {
+            let stdin = io::stdin();
+            let mut stdout = io::stdout().lock();
+            for line in stdin.lock().lines() {
+                let line = line.expect("failed to read stdin");
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let request: SolveKeepRequest = match serde_json::from_str(&line) {
+                    Ok(request) => request,
+                    Err(err) => {
+                        writeln!(
+                            stdout,
+                            "{{\"error\":{}}}",
+                            serde_json::to_string(&err.to_string()).expect("error JSON")
+                        )
+                        .expect("failed to write JSONL error");
+                        stdout.flush().expect("failed to flush JSONL error");
+                        continue;
+                    }
+                };
+                let response = solve_keep_trace_fast(&request);
+                serde_json::to_writer(&mut stdout, &response)
+                    .expect("failed to write traced fast solve-keep JSON");
+                writeln!(stdout).expect("failed to write JSONL newline");
+                stdout
+                    .flush()
+                    .expect("failed to flush traced fast solve-keep JSONL output");
             }
         }
         "solve-keep-fast-batch-jsonl" => {

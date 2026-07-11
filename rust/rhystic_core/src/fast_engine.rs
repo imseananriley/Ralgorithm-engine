@@ -184,7 +184,10 @@ pub struct FastContext {
     intern_to_id: FxHashMap<String, InternId>,
     interned: Vec<String>,
     strict_shuffle_hidden: bool,
-    payment_directed: bool,
+    payment_mode: FastPaymentMode,
+    funding_cache_limit: usize,
+    funding_frontier_limit: usize,
+    funding_cache: FxHashMap<FastFundingCacheKey, Rc<[FastFundingNode]>>,
 }
 
 impl FastContext {
@@ -201,7 +204,9 @@ impl FastContext {
         unique.dedup();
         let mut ctx = Self::default();
         ctx.strict_shuffle_hidden = strict_shuffle_hidden_enabled_from_env();
-        ctx.payment_directed = payment_directed_enabled_from_env();
+        ctx.payment_mode = payment_mode_from_env();
+        ctx.funding_cache_limit = funding_cache_limit_from_env();
+        ctx.funding_frontier_limit = funding_frontier_limit_from_env();
         ctx.intern_common_strings();
         for name in unique {
             ctx.intern_card(&name);
@@ -1129,6 +1134,14 @@ enum FastGambleMode {
     StochasticUnsupported,
 }
 
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+enum FastPaymentMode {
+    #[default]
+    Off,
+    Generic,
+    Packed,
+}
+
 #[derive(Debug, Copy, Clone)]
 struct FastSearchConfig {
     gamble_mode: FastGambleMode,
@@ -1184,16 +1197,42 @@ fn generate_fast_actions_with_config(
     state: &FastState,
     config: &FastSearchConfig,
 ) -> Vec<FastAction> {
-    if ctx.payment_directed {
-        return generate_fast_payment_directed_actions(ctx, state, config);
+    match ctx.payment_mode {
+        FastPaymentMode::Generic => {
+            return generate_fast_generic_payment_directed_actions(ctx, state, config);
+        }
+        FastPaymentMode::Packed => {
+            return generate_fast_packed_payment_directed_actions(ctx, state, config);
+        }
+        FastPaymentMode::Off => {}
     }
+    generate_fast_legacy_actions_with_config(ctx, state, config)
+}
+
+fn generate_fast_legacy_actions_with_config(
+    ctx: &mut FastContext,
+    state: &FastState,
+    config: &FastSearchConfig,
+) -> Vec<FastAction> {
     let mut actions = Vec::new();
     generate_fast_mana_actions(ctx, &mut actions, state);
     generate_fast_strategic_actions_with_config(ctx, &mut actions, state, config);
     actions
 }
 
-fn generate_fast_payment_directed_actions(
+fn generate_fast_trace_actions_with_config(
+    ctx: &mut FastContext,
+    state: &FastState,
+    config: &FastSearchConfig,
+) -> Vec<FastAction> {
+    if ctx.payment_mode == FastPaymentMode::Packed {
+        generate_fast_legacy_actions_with_config(ctx, state, config)
+    } else {
+        generate_fast_actions_with_config(ctx, state, config)
+    }
+}
+
+fn generate_fast_generic_payment_directed_actions(
     ctx: &mut FastContext,
     state: &FastState,
     config: &FastSearchConfig,
@@ -1228,6 +1267,557 @@ fn generate_fast_payment_directed_actions(
     actions
 }
 
+type FastResourceMask = u32;
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash)]
+struct FastManaActivation {
+    requires_untapped: FastResourceMask,
+    requires_present: FastResourceMask,
+    taps: FastResourceMask,
+    sacrifices: FastResourceMask,
+    mine_spent: FastResourceMask,
+    grave_exiles: u8,
+    mana: Mana,
+}
+
+#[derive(Debug, Clone, Default)]
+struct FastManaSourceGroup {
+    options: SmallVec<[FastManaActivation; 8]>,
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash)]
+struct FastFundingNode {
+    mana: Mana,
+    tapped: FastResourceMask,
+    sacrificed: FastResourceMask,
+    mine_spent: FastResourceMask,
+    grave_exiles: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FastFundingCacheKey {
+    battlefield: SmallVec<[FastPerm; 16]>,
+    mantle_attached: SmallVec<[InternId; 2]>,
+    mana: Mana,
+    cost: Cost,
+}
+
+impl FastFundingNode {
+    fn dominates(self, other: Self) -> bool {
+        self.sacrificed == other.sacrificed
+            && self.mine_spent == other.mine_spent
+            && self.grave_exiles == other.grave_exiles
+            && self.tapped & other.tapped == self.tapped
+            && self
+                .mana
+                .iter()
+                .zip(other.mana.iter())
+                .all(|(have, need)| have >= need)
+    }
+
+    fn can_apply(self, activation: FastManaActivation) -> bool {
+        activation.requires_present & self.sacrificed == 0
+            && activation.requires_untapped & (self.tapped | self.sacrificed) == 0
+    }
+
+    fn apply(self, activation: FastManaActivation) -> Self {
+        let sacrificed = self.sacrificed | activation.sacrifices;
+        Self {
+            mana: add_mana(self.mana, activation.mana),
+            tapped: (self.tapped | activation.taps) & !sacrificed,
+            sacrificed,
+            mine_spent: (self.mine_spent | activation.mine_spent) & !sacrificed,
+            grave_exiles: self.grave_exiles.saturating_add(activation.grave_exiles),
+        }
+    }
+}
+
+fn generate_fast_packed_payment_directed_actions(
+    ctx: &mut FastContext,
+    state: &FastState,
+    config: &FastSearchConfig,
+) -> Vec<FastAction> {
+    if !fast_packed_payment_supported(ctx, state) {
+        return generate_fast_legacy_actions_with_config(ctx, state, config);
+    }
+
+    let mut actions = Vec::new();
+    generate_fast_strategic_actions_with_config(ctx, &mut actions, state, config);
+
+    let initial = FastFundingNode {
+        mana: state.mana(),
+        tapped: fast_initial_tapped_mask(state),
+        ..FastFundingNode::default()
+    };
+    let mut sources = None;
+    for cost in fast_relevant_payment_costs(ctx, state) {
+        let plans = if ctx.funding_cache_limit == 0 {
+            let source_groups = sources.get_or_insert_with(|| fast_mana_source_groups(ctx, state));
+            let Some(computed) = compute_fast_funding_plans(
+                initial,
+                source_groups,
+                cost,
+                ctx.funding_frontier_limit,
+            ) else {
+                return generate_fast_legacy_actions_with_config(ctx, state, config);
+            };
+            computed.into()
+        } else {
+            let cache_key = FastFundingCacheKey {
+                battlefield: state.battlefield.clone(),
+                mantle_attached: state.mantle_attached.clone(),
+                mana: initial.mana,
+                cost,
+            };
+            if let Some(cached) = ctx.funding_cache.get(&cache_key).cloned() {
+                cached
+            } else {
+                let source_groups =
+                    sources.get_or_insert_with(|| fast_mana_source_groups(ctx, state));
+                let Some(computed) = compute_fast_funding_plans(
+                    initial,
+                    source_groups,
+                    cost,
+                    ctx.funding_frontier_limit,
+                ) else {
+                    return generate_fast_legacy_actions_with_config(ctx, state, config);
+                };
+                let computed: Rc<[FastFundingNode]> = computed.into();
+                if ctx.funding_cache.len() < ctx.funding_cache_limit {
+                    ctx.funding_cache.insert(cache_key, computed.clone());
+                }
+                computed
+            }
+        };
+        for plan in plans.iter().copied() {
+            if plan == initial {
+                continue;
+            }
+            let funded = apply_fast_funding_plan(ctx, state, plan);
+            generate_fast_costed_strategic_actions_for_cost(
+                ctx,
+                &mut actions,
+                &funded,
+                config,
+                cost,
+            );
+        }
+    }
+    actions
+}
+
+fn fast_packed_payment_supported(ctx: &FastContext, state: &FastState) -> bool {
+    if state.battlefield.len() > FastResourceMask::BITS as usize || state.rain_active() {
+        return false;
+    }
+    if state
+        .battlefield
+        .iter()
+        .any(|perm| perm.kind_enum() == FastPermKind::Ragavan && !perm.tapped() && !perm.fresh())
+    {
+        return false;
+    }
+    let templates = state
+        .hand
+        .iter()
+        .fold(ActionTemplateMask::default(), |mask, card| {
+            mask.union(ctx.card_spec(*card).action_templates)
+        });
+    if templates.contains(ActionTemplateMask::OFFER)
+        || templates.contains(ActionTemplateMask::SACRIFICE_RITUAL)
+        || templates.contains(ActionTemplateMask::ELDRITCH_EVOLUTION)
+        || templates.contains(ActionTemplateMask::NEOFORM)
+        || templates.contains(ActionTemplateMask::CROP_ROTATION)
+        || templates.contains(ActionTemplateMask::BESEECH)
+    {
+        return false;
+    }
+    let has_manamorphose = templates.contains(ActionTemplateMask::MANAMORPHOSE);
+    let has_noxious = templates.contains(ActionTemplateMask::NOXIOUS);
+    if has_manamorphose && has_noxious {
+        return false;
+    }
+    if templates.contains(ActionTemplateMask::LAND)
+        && state
+            .battlefield
+            .iter()
+            .any(|perm| perm.kind_enum() == FastPermKind::City)
+    {
+        return false;
+    }
+    let has_led = state
+        .battlefield
+        .iter()
+        .any(|perm| perm.kind_enum() == FastPermKind::Led && !perm.tapped())
+        || ctx
+            .card_id("Lion's Eye Diamond")
+            .is_some_and(|card| state.has_card(Some(card)));
+    if has_led
+        && (templates.contains(ActionTemplateMask::HAND_TUTOR)
+            || state
+                .battlefield
+                .iter()
+                .any(|perm| perm.kind_enum() == FastPermKind::Wishclaw))
+    {
+        return false;
+    }
+    !ctx.card_id("Diabolic Intent")
+        .is_some_and(|card| state.has_card(Some(card)))
+}
+
+fn fast_relevant_payment_costs(ctx: &FastContext, state: &FastState) -> SmallVec<[Cost; 12]> {
+    let mut costs = SmallVec::new();
+    if !state
+        .battlefield
+        .iter()
+        .any(|perm| perm.kind_enum() == FastPermKind::Nick)
+    {
+        push_unique_cost(&mut costs, [0, 0, 0, 0, 1, 0]);
+    }
+    if state.battlefield.iter().any(|perm| {
+        matches!(
+            perm.kind_enum(),
+            FastPermKind::Mantle | FastPermKind::Wishclaw
+        )
+    }) {
+        push_unique_cost(&mut costs, [1, 0, 0, 0, 0, 0]);
+    }
+    for card in &state.hand {
+        for cost in ctx.card_spec(*card).payment_gate_costs.iter().flatten() {
+            push_unique_cost(&mut costs, *cost);
+        }
+    }
+    costs
+}
+
+fn push_unique_cost(costs: &mut SmallVec<[Cost; 12]>, cost: Cost) {
+    if !costs.contains(&cost) {
+        costs.push(cost);
+    }
+}
+
+fn fast_initial_tapped_mask(state: &FastState) -> FastResourceMask {
+    state
+        .battlefield
+        .iter()
+        .enumerate()
+        .fold(0, |mask, (index, perm)| {
+            mask | if perm.tapped() { 1 << index } else { 0 }
+        })
+}
+
+fn compute_fast_funding_plans(
+    initial: FastFundingNode,
+    sources: &[FastManaSourceGroup],
+    cost: Cost,
+    frontier_limit: usize,
+) -> Option<Vec<FastFundingNode>> {
+    if can_pay_fast(initial.mana, cost) {
+        return Some(vec![initial]);
+    }
+    let mut frontier = vec![initial];
+    let mut funded = Vec::new();
+    for source in sources {
+        let current = frontier;
+        let mut candidates = Vec::with_capacity(current.len() * (source.options.len() + 1));
+        for node in current {
+            candidates.push(node);
+            for option in &source.options {
+                if !node.can_apply(*option) {
+                    continue;
+                }
+                let next = node.apply(*option);
+                if can_pay_fast(next.mana, cost) {
+                    funded.push(next);
+                } else {
+                    candidates.push(next);
+                }
+            }
+        }
+        frontier = pareto_prune_fast_funding(candidates);
+        if frontier.len().saturating_add(funded.len()) > frontier_limit {
+            return None;
+        }
+    }
+    funded.extend(
+        frontier
+            .into_iter()
+            .filter(|node| can_pay_fast(node.mana, cost)),
+    );
+    Some(pareto_prune_fast_funding(funded))
+}
+
+fn pareto_prune_fast_funding(candidates: Vec<FastFundingNode>) -> Vec<FastFundingNode> {
+    let mut unique = FxHashSet::default();
+    let unique_candidates: Vec<_> = candidates
+        .into_iter()
+        .filter(|candidate| unique.insert(*candidate))
+        .collect();
+    unique_candidates
+        .iter()
+        .copied()
+        .enumerate()
+        .filter_map(|(index, candidate)| {
+            (!unique_candidates
+                .iter()
+                .copied()
+                .enumerate()
+                .any(|(other_index, other)| index != other_index && other.dominates(candidate)))
+            .then_some(candidate)
+        })
+        .collect()
+}
+
+fn fast_mana_source_groups(
+    ctx: &mut FastContext,
+    state: &FastState,
+) -> SmallVec<[FastManaSourceGroup; 16]> {
+    let mut groups = SmallVec::new();
+    for (index, perm) in state.battlefield.iter().copied().enumerate() {
+        let kind = perm.kind_enum();
+        if kind == FastPermKind::Tower {
+            continue;
+        }
+        let bit = 1u32 << index;
+        let mut group = FastManaSourceGroup::default();
+        if !perm.tapped() {
+            for option in fast_tap_options(state, perm) {
+                let mana = mana_for_fast_tap(option);
+                let mut activation = FastManaActivation {
+                    requires_untapped: bit,
+                    requires_present: bit,
+                    mana,
+                    ..FastManaActivation::default()
+                };
+                match kind {
+                    FastPermKind::Mine if perm.counters() <= 1 => {
+                        activation.sacrifices = bit;
+                    }
+                    FastPermKind::Mine => {
+                        activation.taps = bit;
+                        activation.mine_spent = bit;
+                    }
+                    FastPermKind::Deathrite => {
+                        activation.taps = bit;
+                        activation.grave_exiles = 1;
+                    }
+                    _ => activation.taps = bit,
+                }
+                group.options.push(activation);
+            }
+        }
+        if kind == FastPermKind::Vein {
+            group.options.push(FastManaActivation {
+                requires_present: bit,
+                sacrifices: bit,
+                mana: [0, 0, 0, 0, 0, 2],
+                ..FastManaActivation::default()
+            });
+            if !perm.tapped() {
+                // Preserve the legacy engine's tap-then-sacrifice Crystal Vein line.
+                group.options.push(FastManaActivation {
+                    requires_untapped: bit,
+                    requires_present: bit,
+                    sacrifices: bit,
+                    mana: [0, 0, 0, 0, 0, 3],
+                    ..FastManaActivation::default()
+                });
+            }
+        }
+        if matches!(kind, FastPermKind::Petal | FastPermKind::Treasure) && !perm.tapped() {
+            for color in 0..5 {
+                group.options.push(FastManaActivation {
+                    requires_untapped: bit,
+                    requires_present: bit,
+                    sacrifices: bit,
+                    mana: mana_for_color_index(color),
+                    ..FastManaActivation::default()
+                });
+            }
+        }
+        if kind == FastPermKind::Tinder {
+            group.options.push(FastManaActivation {
+                requires_present: bit,
+                sacrifices: bit,
+                mana: [0, 2, 0, 0, 0, 0],
+                ..FastManaActivation::default()
+            });
+        }
+        if kind == FastPermKind::Cantor {
+            for color in 0..5 {
+                group.options.push(FastManaActivation {
+                    requires_present: bit,
+                    sacrifices: bit,
+                    mana: mana_for_color_index(color),
+                    ..FastManaActivation::default()
+                });
+            }
+        }
+        if !group.options.is_empty() {
+            groups.push(group);
+        }
+    }
+
+    if state
+        .battlefield
+        .iter()
+        .any(|perm| perm.kind_enum() == FastPermKind::Mantle)
+        && !state.mantle_attached.is_empty()
+    {
+        for (index, perm) in state.battlefield.iter().copied().enumerate() {
+            if perm.tapped()
+                || perm.fresh()
+                || !perm.kind_enum().is_creature()
+                || mantle_key_fast(ctx, perm) != state.mantle_attached
+            {
+                continue;
+            }
+            let bit = 1u32 << index;
+            groups.push(rainbow_tap_group(bit, bit));
+        }
+    }
+
+    let creature_indices = unique_creature_indices(state);
+    for (relic_index, relic) in state.battlefield.iter().copied().enumerate() {
+        if relic.kind_enum() != FastPermKind::Relic {
+            continue;
+        }
+        let _relic_bit = 1u32 << relic_index;
+        for creature_index in &creature_indices {
+            let creature = state.battlefield[*creature_index];
+            if creature.tapped() || !creature.kind_enum().is_legendary() {
+                continue;
+            }
+            let creature_bit = 1u32 << creature_index;
+            groups.push(rainbow_tap_group(creature_bit, creature_bit));
+        }
+    }
+
+    for (drum_index, drum) in state.battlefield.iter().copied().enumerate() {
+        if drum.kind_enum() != FastPermKind::Drum || drum.tapped() {
+            continue;
+        }
+        let drum_bit = 1u32 << drum_index;
+        let mut group = FastManaSourceGroup::default();
+        for creature_index in &creature_indices {
+            let creature = state.battlefield[*creature_index];
+            if creature.tapped() {
+                continue;
+            }
+            let creature_bit = 1u32 << creature_index;
+            for color in 0..5 {
+                group.options.push(FastManaActivation {
+                    requires_untapped: drum_bit | creature_bit,
+                    requires_present: drum_bit | creature_bit,
+                    taps: drum_bit | creature_bit,
+                    mana: mana_for_color_index(color),
+                    ..FastManaActivation::default()
+                });
+            }
+        }
+        if !group.options.is_empty() {
+            groups.push(group);
+        }
+    }
+
+    for (tower_index, tower) in state.battlefield.iter().copied().enumerate() {
+        if tower.kind_enum() != FastPermKind::Tower || tower.tapped() {
+            continue;
+        }
+        let tower_bit = 1u32 << tower_index;
+        let mut group = FastManaSourceGroup::default();
+        group.options.push(FastManaActivation {
+            requires_untapped: tower_bit,
+            requires_present: tower_bit,
+            taps: tower_bit,
+            mana: [0, 0, 0, 0, 0, 1],
+            ..FastManaActivation::default()
+        });
+        for creature_index in &creature_indices {
+            if *creature_index == tower_index {
+                continue;
+            }
+            let creature_bit = 1u32 << creature_index;
+            group.options.push(FastManaActivation {
+                requires_untapped: tower_bit,
+                requires_present: tower_bit | creature_bit,
+                taps: tower_bit,
+                sacrifices: creature_bit,
+                mana: [2, 0, 0, 0, 0, 0],
+                ..FastManaActivation::default()
+            });
+        }
+        groups.push(group);
+    }
+    groups
+}
+
+fn rainbow_tap_group(
+    requires_untapped: FastResourceMask,
+    taps: FastResourceMask,
+) -> FastManaSourceGroup {
+    let mut group = FastManaSourceGroup::default();
+    for color in 0..5 {
+        group.options.push(FastManaActivation {
+            requires_untapped,
+            requires_present: requires_untapped,
+            taps,
+            mana: mana_for_color_index(color),
+            ..FastManaActivation::default()
+        });
+    }
+    group
+}
+
+fn mana_for_fast_tap(option: FastTap) -> Mana {
+    match option {
+        FastTap::Color(color) => mana_for_color_index(color),
+        FastTap::Colorless(amount) => [0, 0, 0, 0, 0, amount],
+        FastTap::Vault => [0, 0, 0, 0, 0, 3],
+    }
+}
+
+fn apply_fast_funding_plan(
+    ctx: &mut FastContext,
+    state: &FastState,
+    plan: FastFundingNode,
+) -> FastState {
+    let mut next = state.clone();
+    next.battlefield.clear();
+    for (index, perm) in state.battlefield.iter().copied().enumerate() {
+        let bit = 1u32 << index;
+        if plan.sacrificed & bit != 0 {
+            if let Some(card) = graveyard_card_for_perm(ctx, perm) {
+                next.add_graveyard_card(ctx, card);
+            } else if perm.kind_enum().is_land() {
+                next.add_land_grave(1);
+            }
+            continue;
+        }
+        let updated = if plan.mine_spent & bit != 0 {
+            make_perm(
+                ctx,
+                FastPermKind::Mine,
+                true,
+                0,
+                false,
+                perm.counters().saturating_sub(1),
+            )
+        } else if plan.tapped & bit != 0 {
+            perm.with_tapped(true)
+        } else {
+            perm
+        };
+        next.battlefield.push(updated);
+    }
+    sort_fast_battlefield(ctx, &mut next.battlefield);
+    for _ in 0..plan.grave_exiles {
+        next.exile_one_land_from_graveyard(ctx);
+    }
+    next.set_mana(plan.mana);
+    next
+}
+
 fn can_pay_fast(mana: Mana, cost: Cost) -> bool {
     let mut remaining = 0u16;
     for index in 0..5 {
@@ -1237,6 +1827,10 @@ fn can_pay_fast(mana: Mana, cost: Cost) -> bool {
         remaining += u16::from(mana[index] - cost[index + 1]);
     }
     remaining + u16::from(mana[5]) >= u16::from(cost[0])
+}
+
+fn payment_cost_matches(filter: Option<Cost>, cost: Cost) -> bool {
+    filter.is_none_or(|expected| expected == cost)
 }
 
 fn has_payable_costed_action(ctx: &FastContext, state: &FastState) -> bool {
@@ -1382,6 +1976,74 @@ fn generate_fast_costed_strategic_actions(
     generate_fast_wishclaw_actions(ctx, actions, state);
     if hand_templates.contains(ActionTemplateMask::GAMBLE) {
         generate_fast_gamble_actions(ctx, actions, state, config);
+    }
+}
+
+fn generate_fast_costed_strategic_actions_for_cost(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+    config: &FastSearchConfig,
+    cost: Cost,
+) {
+    let matching_templates =
+        state
+            .hand
+            .iter()
+            .fold(ActionTemplateMask::default(), |templates, card| {
+                let spec = ctx.card_spec(*card);
+                if spec
+                    .payment_gate_costs
+                    .iter()
+                    .flatten()
+                    .any(|item| *item == cost)
+                {
+                    templates.union(spec.action_templates)
+                } else {
+                    templates
+                }
+            });
+    if matching_templates.contains(ActionTemplateMask::ENGINE) {
+        generate_fast_engine_actions_for_cost(ctx, actions, state, Some(cost));
+    }
+    if cost == [0, 0, 0, 0, 1, 0] {
+        generate_fast_commander_actions(ctx, actions, state);
+    }
+    if matching_templates.contains(ActionTemplateMask::ARTIFACT_SPELL) {
+        generate_fast_artifact_spell_actions_for_cost(ctx, actions, state, Some(cost));
+    }
+    if matching_templates.contains(ActionTemplateMask::CREATURE) {
+        generate_fast_creature_actions_for_cost(ctx, actions, state, Some(cost));
+    }
+    if cost == [1, 0, 0, 0, 0, 0] {
+        generate_fast_mantle_equip_actions(ctx, actions, state);
+    }
+    if matching_templates.contains(ActionTemplateMask::RITUAL) {
+        generate_fast_ritual_actions_for_cost(ctx, actions, state, Some(cost));
+    }
+    if matching_templates.contains(ActionTemplateMask::MANAMORPHOSE) {
+        generate_fast_manamorphose_actions_for_cost(ctx, actions, state, Some(cost));
+    }
+    if matching_templates.contains(ActionTemplateMask::RAIN) {
+        generate_fast_rain_actions_for_cost(ctx, actions, state, Some(cost));
+    }
+    if matching_templates.contains(ActionTemplateMask::GREEN_SUN) {
+        generate_fast_green_sun_actions_for_cost(ctx, actions, state, Some(cost));
+    }
+    if matching_templates.contains(ActionTemplateMask::RANGER_CAPTAIN) {
+        generate_fast_ranger_captain_actions_for_cost(ctx, actions, state, Some(cost));
+    }
+    if matching_templates.contains(ActionTemplateMask::HAND_TUTOR) {
+        generate_fast_hand_tutor_actions_for_cost(ctx, actions, state, Some(cost));
+    }
+    if matching_templates.contains(ActionTemplateMask::TOP_TUTOR) {
+        generate_fast_top_tutor_actions_for_cost(ctx, actions, state, Some(cost));
+    }
+    if cost == [1, 0, 0, 0, 0, 0] {
+        generate_fast_wishclaw_actions(ctx, actions, state);
+    }
+    if matching_templates.contains(ActionTemplateMask::GAMBLE) {
+        generate_fast_gamble_actions_for_cost(ctx, actions, state, config, Some(cost));
     }
 }
 
@@ -1638,6 +2300,15 @@ fn generate_fast_engine_actions(
     actions: &mut Vec<FastAction>,
     state: &FastState,
 ) {
+    generate_fast_engine_actions_for_cost(ctx, actions, state, None);
+}
+
+fn generate_fast_engine_actions_for_cost(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+    cost_filter: Option<Cost>,
+) {
     for name in ["Rhystic Study", "Heartwood Storyteller"] {
         let Some(card) = ctx.card_id(name) else {
             continue;
@@ -1648,6 +2319,9 @@ fn generate_fast_engine_actions(
         let Some((cost, target_mask, perm)) = engine_native_fast(ctx, card) else {
             continue;
         };
+        if !payment_cost_matches(cost_filter, cost) {
+            continue;
+        }
         for mana in pay_options(state.mana(), cost) {
             let mut next = state.clone();
             next.remove_hand_card(card);
@@ -1816,6 +2490,15 @@ fn generate_fast_artifact_spell_actions(
     actions: &mut Vec<FastAction>,
     state: &FastState,
 ) {
+    generate_fast_artifact_spell_actions_for_cost(ctx, actions, state, None);
+}
+
+fn generate_fast_artifact_spell_actions_for_cost(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+    cost_filter: Option<Cost>,
+) {
     for (name, kind, cost) in [
         ("Sol Ring", FastPermKind::Sol, [1, 0, 0, 0, 0, 0]),
         ("Mana Vault", FastPermKind::Vault, [1, 0, 0, 0, 0, 0]),
@@ -1828,6 +2511,9 @@ fn generate_fast_artifact_spell_actions(
         ),
         ("Springleaf Drum", FastPermKind::Drum, [1, 0, 0, 0, 0, 0]),
     ] {
+        if !payment_cost_matches(cost_filter, cost) {
+            continue;
+        }
         let perm = make_perm(ctx, kind, false, 0, false, 0);
         cast_fast_cost_action(ctx, actions, state, name, perm, cost, FAST_MANA_PRIORITY);
     }
@@ -1837,6 +2523,15 @@ fn generate_fast_creature_actions(
     ctx: &mut FastContext,
     actions: &mut Vec<FastAction>,
     state: &FastState,
+) {
+    generate_fast_creature_actions_for_cost(ctx, actions, state, None);
+}
+
+fn generate_fast_creature_actions_for_cost(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+    cost_filter: Option<Cost>,
 ) {
     for (name, costs) in [
         ("Birds of Paradise", &[[0, 0, 0, 0, 0, 1]][..]),
@@ -1856,6 +2551,12 @@ fn generate_fast_creature_actions(
         ("Valley Floodcaller", &[[2, 0, 0, 1, 0, 0]][..]),
         ("Wild Cantor", &[[0, 0, 1, 0, 0, 0], [0, 0, 0, 0, 0, 1]][..]),
     ] {
+        if !costs
+            .iter()
+            .any(|cost| payment_cost_matches(cost_filter, *cost))
+        {
+            continue;
+        }
         let Some(card) = ctx.card_id(name) else {
             continue;
         };
@@ -1863,6 +2564,9 @@ fn generate_fast_creature_actions(
             continue;
         }
         for cost in costs {
+            if !payment_cost_matches(cost_filter, *cost) {
+                continue;
+            }
             for mana in pay_options(state.mana(), *cost) {
                 let mut next = state.clone();
                 next.remove_hand_card(card);
@@ -1932,10 +2636,22 @@ fn generate_fast_ritual_actions(
     actions: &mut Vec<FastAction>,
     state: &FastState,
 ) {
+    generate_fast_ritual_actions_for_cost(ctx, actions, state, None);
+}
+
+fn generate_fast_ritual_actions_for_cost(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+    cost_filter: Option<Cost>,
+) {
     for (name, cost, add) in [
         ("Dark Ritual", [0, 1, 0, 0, 0, 0], [3, 0, 0, 0, 0, 0]),
         ("Rite of Flame", [0, 0, 1, 0, 0, 0], [0, 2, 0, 0, 0, 0]),
     ] {
+        if !payment_cost_matches(cost_filter, cost) {
+            continue;
+        }
         let Some(card) = ctx.card_id(name) else {
             continue;
         };
@@ -1959,6 +2675,15 @@ fn generate_fast_manamorphose_actions(
     actions: &mut Vec<FastAction>,
     state: &FastState,
 ) {
+    generate_fast_manamorphose_actions_for_cost(ctx, actions, state, None);
+}
+
+fn generate_fast_manamorphose_actions_for_cost(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+    cost_filter: Option<Cost>,
+) {
     let Some(card) = ctx.card_id("Manamorphose") else {
         return;
     };
@@ -1966,6 +2691,9 @@ fn generate_fast_manamorphose_actions(
         return;
     }
     for cost in [[1, 0, 1, 0, 0, 0], [1, 0, 0, 0, 0, 1]] {
+        if !payment_cost_matches(cost_filter, cost) {
+            continue;
+        }
         for mana in pay_options(state.mana(), cost) {
             for first_color in 0..5 {
                 for second_color in 0..5 {
@@ -2014,13 +2742,26 @@ fn generate_fast_rain_actions(
     actions: &mut Vec<FastAction>,
     state: &FastState,
 ) {
+    generate_fast_rain_actions_for_cost(ctx, actions, state, None);
+}
+
+fn generate_fast_rain_actions_for_cost(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+    cost_filter: Option<Cost>,
+) {
+    let cost = [0, 1, 0, 0, 0, 0];
+    if !payment_cost_matches(cost_filter, cost) {
+        return;
+    }
     let Some(rain) = ctx.card_id("Rain of Filth") else {
         return;
     };
     if !state.has_card(Some(rain)) {
         return;
     }
-    for mana in pay_options(state.mana(), [0, 1, 0, 0, 0, 0]) {
+    for mana in pay_options(state.mana(), cost) {
         let mut next = state.clone();
         next.remove_hand_to_graveyard(ctx, rain);
         next.set_mana(mana);
@@ -2176,39 +2917,55 @@ fn generate_fast_green_sun_actions(
     actions: &mut Vec<FastAction>,
     state: &FastState,
 ) {
+    generate_fast_green_sun_actions_for_cost(ctx, actions, state, None);
+}
+
+fn generate_fast_green_sun_actions_for_cost(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+    cost_filter: Option<Cost>,
+) {
     let Some(gsz) = ctx.card_id("Green Sun's Zenith") else {
         return;
     };
     if !state.has_card(Some(gsz)) {
         return;
     }
-    for target_name in [
-        "Tinder Wall",
-        "Birds of Paradise",
-        "Deathrite Shaman",
-        "Wild Cantor",
-        "Noble Hierarch",
-        "Ignoble Hierarch",
-    ] {
-        let Some(target) = ctx.card_id(target_name) else {
-            continue;
-        };
-        if !state.has_library_card(Some(target)) {
-            continue;
+    let small_cost = [1, 0, 0, 0, 0, 1];
+    if payment_cost_matches(cost_filter, small_cost) {
+        for target_name in [
+            "Tinder Wall",
+            "Birds of Paradise",
+            "Deathrite Shaman",
+            "Wild Cantor",
+            "Noble Hierarch",
+            "Ignoble Hierarch",
+        ] {
+            let Some(target) = ctx.card_id(target_name) else {
+                continue;
+            };
+            if !state.has_library_card(Some(target)) {
+                continue;
+            }
+            for mana in pay_options(state.mana(), small_cost) {
+                let mut next = state.clone();
+                next.remove_hand_card(gsz);
+                next.remove_library_card(target);
+                obscure_library_top_after_shuffle(ctx, &mut next.library);
+                let perm = creature_perm_fast(ctx, target_name);
+                next.push_perm(ctx, perm);
+                next.set_mana(mana);
+                actions.push(FastAction::new(
+                    after_cast_fast(ctx, state, next),
+                    ENGINE_TUTOR_PRIORITY,
+                ));
+            }
         }
-        for mana in pay_options(state.mana(), [1, 0, 0, 0, 0, 1]) {
-            let mut next = state.clone();
-            next.remove_hand_card(gsz);
-            next.remove_library_card(target);
-            obscure_library_top_after_shuffle(ctx, &mut next.library);
-            let perm = creature_perm_fast(ctx, target_name);
-            next.push_perm(ctx, perm);
-            next.set_mana(mana);
-            actions.push(FastAction::new(
-                after_cast_fast(ctx, state, next),
-                ENGINE_TUTOR_PRIORITY,
-            ));
-        }
+    }
+    let heartwood_cost = [3, 0, 0, 0, 0, 1];
+    if !payment_cost_matches(cost_filter, heartwood_cost) {
+        return;
     }
     let Some(heartwood) = ctx.card_id("Heartwood Storyteller") else {
         return;
@@ -2216,7 +2973,7 @@ fn generate_fast_green_sun_actions(
     if !state.has_library_card(Some(heartwood)) {
         return;
     }
-    for mana in pay_options(state.mana(), [3, 0, 0, 0, 0, 1]) {
+    for mana in pay_options(state.mana(), heartwood_cost) {
         let mut next = state.clone();
         next.remove_hand_card(gsz);
         next.remove_library_card(heartwood);
@@ -2247,6 +3004,19 @@ fn generate_fast_ranger_captain_actions(
     actions: &mut Vec<FastAction>,
     state: &FastState,
 ) {
+    generate_fast_ranger_captain_actions_for_cost(ctx, actions, state, None);
+}
+
+fn generate_fast_ranger_captain_actions_for_cost(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+    cost_filter: Option<Cost>,
+) {
+    let cost = [1, 0, 0, 0, 2, 0];
+    if !payment_cost_matches(cost_filter, cost) {
+        return;
+    }
     let Some(ranger) = ctx.card_id("Ranger-Captain of Eos") else {
         return;
     };
@@ -2256,7 +3026,7 @@ fn generate_fast_ranger_captain_actions(
     if !state.has_card(Some(ranger)) || !state.has_library_card(Some(esper)) {
         return;
     }
-    for mana in pay_options(state.mana(), [1, 0, 0, 0, 2, 0]) {
+    for mana in pay_options(state.mana(), cost) {
         let mut next = state.clone();
         next.remove_hand_card(ranger);
         next.add_hand_card(esper);
@@ -2435,12 +3205,24 @@ fn generate_fast_hand_tutor_actions(
     actions: &mut Vec<FastAction>,
     state: &FastState,
 ) {
+    generate_fast_hand_tutor_actions_for_cost(ctx, actions, state, None);
+}
+
+fn generate_fast_hand_tutor_actions_for_cost(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+    cost_filter: Option<Cost>,
+) {
     for (tutor_name, cost) in [
         ("Demonic Tutor", [1, 1, 0, 0, 0, 0]),
         ("Diabolic Intent", [1, 1, 0, 0, 0, 0]),
         ("Grim Tutor", [1, 2, 0, 0, 0, 0]),
         ("Idyllic Tutor", [2, 0, 0, 0, 1, 0]),
     ] {
+        if !payment_cost_matches(cost_filter, cost) {
+            continue;
+        }
         let Some(tutor) = ctx.card_id(tutor_name) else {
             continue;
         };
@@ -2553,6 +3335,15 @@ fn generate_fast_top_tutor_actions(
     actions: &mut Vec<FastAction>,
     state: &FastState,
 ) {
+    generate_fast_top_tutor_actions_for_cost(ctx, actions, state, None);
+}
+
+fn generate_fast_top_tutor_actions_for_cost(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+    cost_filter: Option<Cost>,
+) {
     for (tutor_name, cost) in [
         ("Enlightened Tutor", [0, 0, 0, 0, 1, 0]),
         ("Imperial Seal", [0, 1, 0, 0, 0, 0]),
@@ -2561,6 +3352,9 @@ fn generate_fast_top_tutor_actions(
         ("Vampiric Tutor", [0, 1, 0, 0, 0, 0]),
         ("Worldly Tutor", [0, 0, 0, 0, 0, 1]),
     ] {
+        if !payment_cost_matches(cost_filter, cost) {
+            continue;
+        }
         let Some(tutor) = ctx.card_id(tutor_name) else {
             continue;
         };
@@ -2633,6 +3427,20 @@ fn generate_fast_gamble_actions(
     state: &FastState,
     config: &FastSearchConfig,
 ) {
+    generate_fast_gamble_actions_for_cost(ctx, actions, state, config, None);
+}
+
+fn generate_fast_gamble_actions_for_cost(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+    config: &FastSearchConfig,
+    cost_filter: Option<Cost>,
+) {
+    let cost = [0, 0, 1, 0, 0, 0];
+    if !payment_cost_matches(cost_filter, cost) {
+        return;
+    }
     let Some(gamble) = ctx.card_id("Gamble") else {
         return;
     };
@@ -2644,7 +3452,6 @@ fn generate_fast_gamble_actions(
     {
         return;
     }
-    let cost = [0, 0, 1, 0, 0, 0];
     for mana_after_cost in pay_options(state.mana(), cost) {
         let targets = gamble_targets_fast(ctx, state, mana_after_cost, config);
         for target in targets {
@@ -3749,15 +4556,30 @@ fn strict_shuffle_hidden_enabled_from_env() -> bool {
         .unwrap_or(false)
 }
 
-fn payment_directed_enabled_from_env() -> bool {
-    std::env::var("RALGORITHM_PAYMENT_DIRECTED")
-        .map(|value| {
-            matches!(
-                value.as_str(),
-                "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
-            )
-        })
-        .unwrap_or(false)
+fn payment_mode_from_env() -> FastPaymentMode {
+    match std::env::var("RALGORITHM_PAYMENT_DIRECTED")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "generic" => FastPaymentMode::Generic,
+        "1" | "true" | "yes" | "on" | "packed" => FastPaymentMode::Packed,
+        _ => FastPaymentMode::Off,
+    }
+}
+
+fn funding_cache_limit_from_env() -> usize {
+    std::env::var("RALGORITHM_FUNDING_CACHE_LIMIT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(100_000)
+}
+
+fn funding_frontier_limit_from_env() -> usize {
+    std::env::var("RALGORITHM_FUNDING_FRONTIER_LIMIT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(usize::MAX)
 }
 
 fn obscure_library_top_after_shuffle(ctx: &mut FastContext, library: &mut Vec<CardId>) {
@@ -4206,6 +5028,14 @@ struct FastTraceSolveResult {
     trace_path: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SolveKeepTraceFastResponse {
+    pub response: SolveKeepResponse,
+    pub trace_turn: Option<u8>,
+    pub trace_capped: bool,
+    pub trace_path: Vec<String>,
+}
+
 fn close_turn_fast_inner(
     ctx: &mut FastContext,
     request: &CloseTurnRequest,
@@ -4303,7 +5133,7 @@ fn close_turn_trace_fast_inner(
                 path: build_trace_path(&state, &start_paths, &parents),
             };
         }
-        let mut actions = generate_fast_actions_with_config(ctx, &state, config);
+        let mut actions = generate_fast_trace_actions_with_config(ctx, &state, config);
         if request.action_sort {
             actions.sort_by_key(|action| action.priority);
         }
@@ -5280,6 +6110,33 @@ pub fn solve_keep_fast(request: &SolveKeepRequest) -> SolveKeepResponse {
         request.action_sort,
         &config,
     )
+}
+
+pub fn solve_keep_trace_fast(request: &SolveKeepRequest) -> SolveKeepTraceFastResponse {
+    let mut card_names = request.hand.clone();
+    card_names.extend(request.library.iter().cloned());
+    let mut ctx = FastContext::with_card_names(card_names);
+    let config = FastSearchConfig::from_solve_request(request);
+    let traced = solve_keep_trace_fast_with_ctx(
+        &mut ctx,
+        &request.hand,
+        &request.library,
+        request.gemstone_live,
+        request.state_limit,
+        request.max_turns,
+        &request.goal,
+        request.engine_target_count,
+        &request.engine_success_policy,
+        request.remora_upkeep_payments,
+        request.action_sort,
+        &config,
+    );
+    SolveKeepTraceFastResponse {
+        response: traced.response,
+        trace_turn: traced.trace_turn,
+        trace_capped: traced.trace_capped,
+        trace_path: traced.trace_path,
+    }
 }
 
 pub fn solve_keep_batch_fast(requests: &[SolveKeepRequest]) -> Vec<SolveKeepResponse> {
@@ -9330,6 +10187,13 @@ fn hash_value<T: Hash>(value: &T) -> u64 {
 mod tests {
     use super::*;
 
+    fn fast_action_set(actions: Vec<FastAction>) -> FxHashSet<(FastState, i32, bool)> {
+        actions
+            .into_iter()
+            .map(|action| (action.next_state, action.priority, action.is_ragavan_attack))
+            .collect()
+    }
+
     fn generate_all_legacy_groups(ctx: &mut FastContext, state: &FastState) -> Vec<FastAction> {
         let mut actions = Vec::new();
         generate_fast_mana_actions(ctx, &mut actions, state);
@@ -9481,7 +10345,7 @@ mod tests {
     #[test]
     fn payment_directed_actions_fold_mana_taps_into_casts() {
         let mut context = FastContext::with_card_names(["Rhystic Study"]);
-        context.payment_directed = true;
+        context.payment_mode = FastPaymentMode::Generic;
         let mut fixture = fixture_state(vec![
             fixture_perm("LAND", "U"),
             fixture_perm("LAND", "U"),
@@ -9517,7 +10381,7 @@ mod tests {
     #[test]
     fn payment_directed_actions_preserve_city_float_before_land() {
         let mut context = FastContext::with_card_names(["City of Brass", "City of Traitors"]);
-        context.payment_directed = true;
+        context.payment_mode = FastPaymentMode::Generic;
         let mut fixture = fixture_state(vec![fixture_perm("CITY", "")]);
         fixture.hand.push("City of Brass".to_string());
         let state = FastState::from_fixture(&mut context, &fixture);
@@ -9532,6 +10396,111 @@ mod tests {
                     .iter()
                     .all(|perm| perm.kind_enum() != FastPermKind::City)
         }));
+    }
+
+    #[test]
+    fn packed_payment_preserves_mana_vault_surplus() {
+        let mut context = FastContext::with_card_names(["Mana Vault", "Sol Ring"]);
+        context.payment_mode = FastPaymentMode::Packed;
+        let mut fixture = fixture_state(vec![fixture_perm("VAULT", "")]);
+        fixture.hand.push("Sol Ring".to_string());
+        let state = FastState::from_fixture(&mut context, &fixture);
+
+        let actions = generate_fast_actions(&mut context, &state);
+        assert!(actions.iter().any(|action| {
+            action.next_state.mana()[5] == 2
+                && action
+                    .next_state
+                    .battlefield
+                    .iter()
+                    .any(|perm| perm.kind_enum() == FastPermKind::Sol)
+                && action
+                    .next_state
+                    .battlefield
+                    .iter()
+                    .any(|perm| perm.kind_enum() == FastPermKind::Vault && perm.tapped())
+        }));
+    }
+
+    #[test]
+    fn packed_payment_applies_last_gemstone_mine_counter() {
+        let mut context = FastContext::with_card_names(["Gemstone Mine", "Mana Vault", "Sol Ring"]);
+        context.payment_mode = FastPaymentMode::Packed;
+        let mut fixture = fixture_state(vec![fixture_perm("MINE", "1")]);
+        fixture.hand.push("Sol Ring".to_string());
+        let state = FastState::from_fixture(&mut context, &fixture);
+
+        let actions = generate_fast_actions(&mut context, &state);
+        assert!(actions.iter().any(|action| {
+            action.next_state.land_grave_count == 1
+                && action
+                    .next_state
+                    .battlefield
+                    .iter()
+                    .all(|perm| perm.kind_enum() != FastPermKind::Mine)
+                && action
+                    .next_state
+                    .battlefield
+                    .iter()
+                    .any(|perm| perm.kind_enum() == FastPermKind::Sol)
+        }));
+    }
+
+    #[test]
+    fn packed_frontier_limit_falls_back_to_legacy_actions() {
+        let mut context = FastContext::with_card_names(["Rhystic Study"]);
+        let mut fixture = fixture_state(vec![
+            fixture_perm("LAND", "U"),
+            fixture_perm("LAND", "U"),
+            fixture_perm("LAND", "U"),
+        ]);
+        fixture.hand.push("Rhystic Study".to_string());
+        let state = FastState::from_fixture(&mut context, &fixture);
+
+        context.payment_mode = FastPaymentMode::Off;
+        let legacy = fast_action_set(generate_fast_actions(&mut context, &state));
+        context.payment_mode = FastPaymentMode::Packed;
+        context.funding_frontier_limit = 0;
+        let bounded = fast_action_set(generate_fast_actions(&mut context, &state));
+
+        assert_eq!(bounded, legacy);
+    }
+
+    #[test]
+    fn packed_payment_actions_are_legal_under_generic_oracle() {
+        let payload: ActionFixturePayload = serde_json::from_str(include_str!(
+            "../../../fixtures/parity/action_fixtures_pass48_20260703.json"
+        ))
+        .expect("action parity fixture");
+        let mut names = Vec::new();
+        for fixture in &payload.fixtures {
+            names.extend(fixture.state.hand.iter().cloned());
+            names.extend(fixture.state.library.iter().cloned());
+        }
+        let mut context = FastContext::with_card_names(names);
+        let mut compared = 0;
+        for fixture in &payload.fixtures {
+            let state = FastState::from_fixture(&mut context, &fixture.state);
+            if !fast_packed_payment_supported(&context, &state) {
+                continue;
+            }
+            context.payment_mode = FastPaymentMode::Generic;
+            let generic = fast_action_set(generate_fast_actions(&mut context, &state));
+            context.payment_mode = FastPaymentMode::Packed;
+            let packed = fast_action_set(generate_fast_actions(&mut context, &state));
+            let illegal: Vec<_> = packed.difference(&generic).collect();
+            assert!(
+                illegal.is_empty(),
+                "fixture {} produced {} packed-only actions",
+                fixture.fixture_index,
+                illegal.len()
+            );
+            compared += 1;
+        }
+        assert!(
+            compared >= 20,
+            "insufficient packed fixture coverage: {compared}"
+        );
     }
 
     #[test]
