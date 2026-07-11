@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Rhystic Run Validator</title>
+    <link rel="stylesheet" href="./styles.css?v=20260705-progress-full-rows">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <h1>Rhystic Run Validator</h1>
+          <p id="runSummary">Loading simulator artifacts...</p>
+        </div>
+        <div class="run-controls">
+          <label>
+            <span>Run</span>
+            <select id="runSelect"></select>
+          </label>
+          <label class="file-loader">
+            <span>JSON</span>
+            <input id="fileInput" type="file" accept="application/json,.json">
+          </label>
+          <label>
+            <span>Filter</span>
+            <select id="recordFilter">
+              <option value="miss">Misses</option>
+              <option value="capped">Capped</option>
+              <option value="hit">Hits</option>
+              <option value="traced">Traced</option>
+              <option value="all">All</option>
+            </select>
+          </label>
+          <label>
+            <span>Search</span>
+            <input id="recordSearch" type="search" placeholder="card or game id">
+          </label>
+        </div>
+      </header>
+
+      <section class="stats-bar" aria-label="Run stats">
+        <div><span>Games</span><strong id="statGames">0</strong></div>
+        <div><span>Success</span><strong id="statSuccess">0%</strong></div>
+        <div><span>Caps</span><strong id="statCaps">0</strong></div>
+        <div><span>Selected</span><strong id="statSelected">none</strong></div>
+        <div><span>Gemstone</span><strong id="statGemstone">dead</strong></div>
+        <div><span>Mull</span><strong id="statMull">0 / 0</strong></div>
+      </section>
+
+      <section class="run-progress" aria-label="Experiment progress">
+        <div class="progress-head">
+          <div>
+            <h2>Experiment Progress</h2>
+            <p id="progressStatus">No active paired sweep progress found.</p>
+          </div>
+          <label>
+            <span>Progress Run</span>
+            <select id="progressRunSelect"></select>
+          </label>
+        </div>
+        <div class="progress-meter" aria-label="Run completion">
+          <div id="progressBar" class="progress-fill"></div>
+        </div>
+        <div class="progress-grid">
+          <div><span>Complete</span><strong id="progressComplete">0 / 0</strong></div>
+          <div><span>Current</span><strong id="progressCurrent">idle</strong></div>
+          <div><span>Last</span><strong id="progressLast">none</strong></div>
+          <div><span>ETA</span><strong id="progressEta">unknown</strong></div>
+          <div><span>Shards</span><strong id="progressShards">0</strong></div>
+        </div>
+        <div class="progress-outputs">
+          <span id="progressOutputSummary"></span>
+        </div>
+        <div class="progress-table-wrap" aria-label="Completed variant rows">
+          <table class="progress-table">
+            <thead>
+              <tr>
+                <th>Variant</th>
+                <th>Swap</th>
+                <th>Raw Delta</th>
+                <th>Score Delta</th>
+                <th>Score CI95</th>
+              </tr>
+            </thead>
+            <tbody id="progressTopRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <div class="workspace">
+        <aside class="record-panel">
+          <div class="panel-heading">
+            <h2>Records</h2>
+            <span id="recordCount">0</span>
+          </div>
+          <div id="recordList" class="record-list"></div>
+        </aside>
+
+        <section class="table-panel" aria-label="Validation table">
+          <div class="table-toolbar">
+            <div class="step-controls">
+              <button id="resetBoardBtn" type="button">Reset Board</button>
+              <button id="prevActionBtn" type="button">Back</button>
+              <button id="playActionBtn" type="button">Play</button>
+              <button id="nextActionBtn" type="button">Step</button>
+              <input id="actionScrubber" type="range" min="0" max="0" value="0">
+            </div>
+            <div class="probe-controls">
+              <input id="stateLimitInput" type="number" min="1" step="1000" value="400000">
+              <button id="solveBtn" type="button">Run Rust Probe</button>
+              <button id="bottomAuditBtn" type="button">Audit Bottoms</button>
+              <button id="gambleBtn" type="button">Audit Gamble</button>
+            </div>
+          </div>
+
+          <div class="playmat">
+            <section class="zone library-zone" data-zone="library">
+              <header><h2>Library</h2><span id="libraryCount">0</span></header>
+              <div id="libraryZone" class="zone-body stacked"></div>
+            </section>
+            <section class="zone opening-zone" data-zone="opening">
+              <header><h2>Opening Hand</h2><span id="openingCount">0</span></header>
+              <div id="openingZone" class="zone-body hand"></div>
+            </section>
+            <section class="zone stack-zone" data-zone="stack">
+              <header><h2>Stack</h2><span id="stackCount">0</span></header>
+              <div id="stackZone" class="zone-body"></div>
+            </section>
+            <section class="zone battlefield-zone" data-zone="battlefield">
+              <header><h2>Battlefield</h2><span id="battlefieldCount">0</span></header>
+              <div id="battlefieldZone" class="zone-body battlefield"></div>
+            </section>
+            <section class="zone hand-zone" data-zone="hand">
+              <header><h2>Kept Hand</h2><span id="handCount">0</span></header>
+              <div id="handZone" class="zone-body hand"></div>
+            </section>
+            <section class="zone bottomed-zone" data-zone="bottomed">
+              <header><h2>Bottomed</h2><span id="bottomedCount">0</span></header>
+              <div id="bottomedZone" class="zone-body compact"></div>
+            </section>
+            <section class="zone graveyard-zone" data-zone="graveyard">
+              <header><h2>Graveyard</h2><span id="graveyardCount">0</span></header>
+              <div id="graveyardZone" class="zone-body compact"></div>
+            </section>
+            <section class="zone exile-zone" data-zone="exile">
+              <header><h2>Exile</h2><span id="exileCount">0</span></header>
+              <div id="exileZone" class="zone-body compact"></div>
+            </section>
+            <section class="zone line-zone" data-zone="line">
+              <header><h2>Line Cards</h2><span id="lineCount">0</span></header>
+              <div id="lineZone" class="zone-body compact"></div>
+            </section>
+          </div>
+        </section>
+
+        <aside class="inspector">
+          <section class="selected-card">
+            <div id="spotlightCard" class="spotlight-card"></div>
+            <div>
+              <span id="recordType" class="eyebrow">Record</span>
+              <h2 id="recordTitle">No record selected</h2>
+              <p id="recordDetail"></p>
+              <div id="probeResult" class="probe-result"></div>
+              <div id="bottomAuditResult" class="probe-result bottom-audit-result"></div>
+              <div id="gambleResult" class="probe-result gamble-result"></div>
+            </div>
+          </section>
+
+          <section class="mull-panel">
+            <div class="panel-heading">
+              <h2>Mulligans</h2>
+              <span id="mulliganCount">0</span>
+            </div>
+            <ol id="mulliganList" class="mulligan-list"></ol>
+          </section>
+
+          <section class="action-panel">
+            <div class="panel-heading">
+              <h2>Actions</h2>
+              <span id="actionCount">0</span>
+            </div>
+            <ol id="actionList" class="action-list"></ol>
+          </section>
+
+          <section class="manual-panel">
+            <div class="panel-heading">
+              <h2>Manual Line</h2>
+              <button id="clearManualBtn" type="button">Clear</button>
+            </div>
+            <ul id="manualLog" class="manual-log"></ul>
+          </section>
+
+          <section class="note-panel">
+            <div class="panel-heading">
+              <h2>Notes</h2>
+              <button id="saveNoteBtn" type="button">Save</button>
+            </div>
+            <textarea id="noteText" rows="5" placeholder="Missed line, suspicious action, or simulator fix idea"></textarea>
+          </section>
+        </aside>
+      </div>
+    </main>
+
+    <script src="./app.js?v=20260705-progress-full-rows"></script>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+/target/
+**/target/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.DS_Store
+*.log
+*.tmp
+benchmarks/results/
+/benchmarks/*.json
+artifacts/
+data/
+rpk.txt
+.env
+.env.*
