@@ -6,9 +6,9 @@ This repository is a clean fork of the active simulator implementation. Historic
 
 ## Engine Layers
 
-1. `fast_engine`: the existing fixed-library Rust solver used as a parity oracle during migration.
-2. `nextgen`: fixed-size information-state and resource-planning primitives for the nonanticipating reference solver.
-3. Future policy evaluator: a compiled visible-information policy for bulk paired experiments.
+1. `fast_engine`: the fixed-library Rust solver used as a parity oracle and production bridge during migration. Libraries use shared immutable storage, cached hashes, and cached structural-key canonicalization.
+2. `nextgen`: fixed-size information state, immutable card registry, resource planning, explicit-chance reference search, and compiled-policy evaluation primitives.
+3. Production integration: card classification now reads from the registry; full packed-state action generation and the deck-specific compiled policy remain the next migration stage.
 
 The reference solver and production policy intentionally have different jobs. The reference solver supplies strict labels and correction samples; the production policy supplies throughput.
 
@@ -29,3 +29,5 @@ python3 scripts/source_manifest.py --out benchmarks/source_manifest.json
 ```
 
 Run configurations must record the manifest digest, deck digest, root seed, policy version, objective weights, and state-cap behavior.
+
+The current generation comparison is documented in [docs/generation2_benchmark.md](docs/generation2_benchmark.md).

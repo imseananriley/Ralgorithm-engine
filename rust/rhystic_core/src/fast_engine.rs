@@ -1,3 +1,7 @@
+// PersistentLibrary mutates only memoized digests/canonical views; logical card order is stable.
+#![allow(clippy::mutable_key_type)]
+
+use crate::nextgen::{CardFlags, CardMetadata};
 use crate::{
     add_mana, bottom_choices, generate_fixture_action_cores, pay_options, state_signature,
     ActionFixturePayload, CloseTurnRequest, CloseTurnResponse, Cost, EarliestRequest, FixturePerm,
@@ -17,12 +21,121 @@ use rand_chacha::ChaCha20Rng;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
 use smallvec::SmallVec;
+use std::cell::{Cell, OnceCell};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::ops::{Deref, DerefMut};
+use std::rc::Rc;
 use std::time::Instant;
 
 pub type CardId = u16;
 pub type InternId = u16;
+
+#[derive(Debug, Clone, Default)]
+pub struct PersistentLibrary(Rc<LibraryStorage>);
+
+#[derive(Debug)]
+struct LibraryStorage {
+    cards: Vec<CardId>,
+    hash: Cell<Option<u64>>,
+    canonical: [OnceCell<Rc<LibraryStorage>>; 4],
+}
+
+impl LibraryStorage {
+    fn new(cards: Vec<CardId>) -> Self {
+        Self {
+            cards,
+            hash: Cell::new(None),
+            canonical: std::array::from_fn(|_| OnceCell::new()),
+        }
+    }
+}
+
+impl Default for LibraryStorage {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
+impl Clone for LibraryStorage {
+    fn clone(&self) -> Self {
+        Self::new(self.cards.clone())
+    }
+}
+
+impl PersistentLibrary {
+    pub fn is_shared_with(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+
+    fn canonicalized_tail(&self, ordered_prefix: usize) -> Self {
+        let prefix = ordered_prefix.min(self.0.cards.len());
+        if self.0.cards[prefix..].is_sorted() {
+            return self.clone();
+        }
+        if prefix < self.0.canonical.len() {
+            let storage = self.0.canonical[prefix].get_or_init(|| {
+                let mut cards = self.0.cards.clone();
+                cards[prefix..].sort_unstable();
+                Rc::new(LibraryStorage::new(cards))
+            });
+            return Self(storage.clone());
+        }
+        let mut cards = self.0.cards.clone();
+        cards[prefix..].sort_unstable();
+        Self::from(cards)
+    }
+}
+
+impl From<Vec<CardId>> for PersistentLibrary {
+    fn from(cards: Vec<CardId>) -> Self {
+        Self(Rc::new(LibraryStorage::new(cards)))
+    }
+}
+
+impl FromIterator<CardId> for PersistentLibrary {
+    fn from_iter<T: IntoIterator<Item = CardId>>(iter: T) -> Self {
+        Self::from(iter.into_iter().collect::<Vec<_>>())
+    }
+}
+
+impl Deref for PersistentLibrary {
+    type Target = Vec<CardId>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0.cards
+    }
+}
+
+impl DerefMut for PersistentLibrary {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        let storage = Rc::make_mut(&mut self.0);
+        storage.hash.set(None);
+        for cached in &mut storage.canonical {
+            cached.take();
+        }
+        &mut storage.cards
+    }
+}
+
+impl PartialEq for PersistentLibrary {
+    fn eq(&self, other: &Self) -> bool {
+        self.is_shared_with(other) || self.0.cards == other.0.cards
+    }
+}
+
+impl Eq for PersistentLibrary {}
+
+impl Hash for PersistentLibrary {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let digest = self.0.hash.get().unwrap_or_else(|| {
+            let value = hash_value(&self.0.cards);
+            self.0.hash.set(Some(value));
+            value
+        });
+        state.write_u64(digest);
+    }
+}
 
 const COLORS: &[u8] = b"BRUWGC";
 
@@ -44,6 +157,7 @@ fn is_theoretical_rainbow_land_name(card: &str) -> bool {
 pub struct FastContext {
     card_to_id: FxHashMap<String, CardId>,
     cards: Vec<String>,
+    card_specs: Vec<CardMetadata>,
     intern_to_id: FxHashMap<String, InternId>,
     interned: Vec<String>,
     strict_shuffle_hidden: bool,
@@ -87,6 +201,7 @@ impl FastContext {
         }
         let id = self.cards.len() as CardId;
         self.cards.push(name.to_string());
+        self.card_specs.push(CardMetadata::compile(name));
         self.card_to_id.insert(name.to_string(), id);
         id
     }
@@ -108,6 +223,10 @@ impl FastContext {
     pub fn card_id(&self, name: &str) -> Option<CardId> {
         let name = canonical_card_name(name);
         self.card_to_id.get(name).copied()
+    }
+
+    pub fn card_spec(&self, id: CardId) -> &CardMetadata {
+        &self.card_specs[id as usize]
     }
 
     pub fn interned_string(&self, id: InternId) -> &str {
@@ -592,7 +711,7 @@ pub struct FastState {
     pub engine_targets: u8,
     pub graveyard: SmallVec<[CardId; 16]>,
     pub hand: SmallVec<[CardId; 16]>,
-    pub library: Vec<CardId>,
+    pub library: PersistentLibrary,
     pub mana: PackedMana,
     pub mantle_attached: SmallVec<[InternId; 2]>,
     pub nature_attached: SmallVec<[InternId; 2]>,
@@ -699,7 +818,7 @@ impl FastState {
         let turn = ((self.counters >> 12) & 0b1111) as u8;
         let ordered_draws_remaining = max_turns.saturating_sub(turn) as usize;
         if self.library.len() > ordered_draws_remaining {
-            self.library[ordered_draws_remaining..].sort_unstable();
+            self.library = self.library.canonicalized_tail(ordered_draws_remaining);
         }
     }
 
@@ -767,11 +886,8 @@ impl FastState {
     }
 
     fn add_graveyard_card(&mut self, ctx: &FastContext, card: CardId) {
-        let name = ctx.card_name(card);
-        if is_land_card_name(name)
-            || is_theoretical_rainbow_land_name(name)
-            || is_mdfc_land_name(name)
-        {
+        let spec = ctx.card_spec(card);
+        if spec.flags.contains(CardFlags::LAND) || spec.flags.contains(CardFlags::MDFC_LAND) {
             self.add_land_grave(1);
         }
         match self.graveyard.binary_search(&card) {
@@ -784,11 +900,8 @@ impl FastState {
             return false;
         };
         self.graveyard.remove(index);
-        let name = ctx.card_name(card);
-        if is_land_card_name(name)
-            || is_theoretical_rainbow_land_name(name)
-            || is_mdfc_land_name(name)
-        {
+        let spec = ctx.card_spec(card);
+        if spec.flags.contains(CardFlags::LAND) || spec.flags.contains(CardFlags::MDFC_LAND) {
             self.set_land_grave_count(self.land_grave_count.saturating_sub(1));
         }
         true
@@ -812,10 +925,8 @@ impl FastState {
 
     fn exile_one_land_from_graveyard(&mut self, ctx: &FastContext) {
         if let Some(card) = self.graveyard.iter().copied().find(|card| {
-            let name = ctx.card_name(*card);
-            is_land_card_name(name)
-                || is_theoretical_rainbow_land_name(name)
-                || is_mdfc_land_name(name)
+            let spec = ctx.card_spec(*card);
+            spec.flags.contains(CardFlags::LAND) || spec.flags.contains(CardFlags::MDFC_LAND)
         }) {
             self.remove_graveyard_card(ctx, card);
         } else {
@@ -1305,11 +1416,8 @@ fn generate_fast_land_actions(
         return;
     }
     for card in state.hand.iter().copied().collect::<Vec<_>>() {
-        let name = ctx.card_name(card);
-        if !is_land_card_name(name)
-            && !is_theoretical_rainbow_land_name(name)
-            && !is_mdfc_land_name(name)
-        {
+        let flags = ctx.card_spec(card).flags;
+        if !flags.contains(CardFlags::LAND) && !flags.contains(CardFlags::MDFC_LAND) {
             continue;
         }
         for (perm, library, grave_inc) in land_options_fast(ctx, card, &state.library) {
@@ -1328,7 +1436,7 @@ fn generate_fast_land_actions(
             next.battlefield.push(perm);
             sort_fast_battlefield(ctx, &mut next.battlefield);
             next.remove_hand_card(card);
-            next.library = library;
+            next.library = library.into();
             next.set_flag(FastState::LAND_PLAYED, true);
             if grave_inc > 0 {
                 next.add_graveyard_card(ctx, card);
@@ -1380,11 +1488,11 @@ fn generate_fast_chrome_mox_actions(
     }
     for imprint in state.hand.iter().copied().collect::<Vec<_>>() {
         let imprint_name = ctx.card_name(imprint).to_string();
-        let imprint_colors = card_color_mask(&imprint_name);
+        let imprint_spec = ctx.card_spec(imprint);
+        let imprint_colors = imprint_spec.color_mask;
         if imprint == chrome
-            || is_land_card_name(&imprint_name)
-            || is_theoretical_rainbow_land_name(&imprint_name)
-            || is_artifact_card_name(&imprint_name)
+            || imprint_spec.flags.contains(CardFlags::LAND)
+            || imprint_spec.flags.contains(CardFlags::ARTIFACT)
             || imprint_colors == 0
         {
             continue;
@@ -1411,10 +1519,7 @@ fn generate_fast_mox_diamond_actions(
         return;
     }
     for land in state.hand.iter().copied().collect::<Vec<_>>() {
-        if {
-            let name = ctx.card_name(land);
-            !is_land_card_name(name) && !is_theoretical_rainbow_land_name(name)
-        } {
+        if !ctx.card_spec(land).flags.contains(CardFlags::LAND) {
             continue;
         }
         let mut next = state.clone();
@@ -2031,7 +2136,7 @@ fn generate_fast_crop_rotation_actions(
                     let base = sac_land_fast(ctx, state, land_index);
                     let mut next = base.clone();
                     next.remove_hand_to_graveyard(ctx, crop);
-                    next.library = library;
+                    next.library = library.into();
                     obscure_library_top_after_shuffle(ctx, &mut next.library);
                     next.push_perm(ctx, target_perm);
                     next.set_mana(mana);
@@ -2198,7 +2303,8 @@ fn generate_fast_top_tutor_actions(
                         .copied()
                         .filter(|card| *card != target)
                         .collect(),
-                );
+                )
+                .into();
                 next.set_mana(mana);
                 actions.push(FastAction::new(
                     after_cast_fast(ctx, state, next),
@@ -2842,14 +2948,15 @@ fn land_options_fast(
     library: &[CardId],
 ) -> Vec<(FastPerm, Vec<CardId>, u8)> {
     let card_name = ctx.card_name(card).to_string();
-    if is_mdfc_land_name(&card_name) {
+    let flags = ctx.card_spec(card).flags;
+    if flags.contains(CardFlags::MDFC_LAND) {
         return vec![(
             make_perm(ctx, FastPermKind::Land, false, color_mask("U"), false, 0),
             library.to_vec(),
             0,
         )];
     }
-    if is_fetch_name(&card_name) {
+    if flags.contains(CardFlags::FETCH) {
         let mut seen = BTreeSet::new();
         let mut out = Vec::new();
         for target in library {
@@ -3359,7 +3466,7 @@ fn mask_to_colors(mask: u8) -> String {
     out
 }
 
-fn is_land_card_name(card: &str) -> bool {
+pub(crate) fn is_land_card_name(card: &str) -> bool {
     if is_theoretical_rainbow_land_name(card) {
         return true;
     }
@@ -3408,14 +3515,14 @@ fn is_land_card_name(card: &str) -> bool {
     )
 }
 
-fn is_mdfc_land_name(card: &str) -> bool {
+pub(crate) fn is_mdfc_land_name(card: &str) -> bool {
     matches!(
         card,
         "Sink into Stupor" | "Sink into Stupor // Soporific Springs"
     )
 }
 
-fn is_artifact_card_name(card: &str) -> bool {
+pub(crate) fn is_artifact_card_name(card: &str) -> bool {
     matches!(
         card,
         "Arcane Signet"
@@ -3434,7 +3541,7 @@ fn is_artifact_card_name(card: &str) -> bool {
     )
 }
 
-fn is_fetch_name(card: &str) -> bool {
+pub(crate) fn is_fetch_name(card: &str) -> bool {
     matches!(
         card,
         "Arid Mesa"
@@ -3595,7 +3702,7 @@ fn fetch_can_get_name(fetch: &str, target: &str) -> bool {
     )
 }
 
-fn card_color_mask(card: &str) -> u8 {
+pub(crate) fn card_color_mask(card: &str) -> u8 {
     color_mask(match card {
         "Angel's Grace" => "W",
         "An Offer You Can't Refuse" => "U",
@@ -4703,10 +4810,8 @@ fn future_visible_setup_states_fast(ctx: &mut FastContext, state: &FastState) ->
         .iter()
         .copied()
         .filter(|card| {
-            let name = ctx.card_name(*card);
-            is_land_card_name(name)
-                || is_theoretical_rainbow_land_name(name)
-                || is_mdfc_land_name(name)
+            let flags = ctx.card_spec(*card).flags;
+            flags.contains(CardFlags::LAND) || flags.contains(CardFlags::MDFC_LAND)
         })
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -4716,7 +4821,7 @@ fn future_visible_setup_states_fast(ctx: &mut FastContext, state: &FastState) ->
         for (perm, library, grave_inc) in land_options_fast(ctx, card, &state.library) {
             let mut next = state.clone();
             next.remove_hand_card(card);
-            next.library = library;
+            next.library = library.into();
             let city_indices: Vec<usize> = next
                 .battlefield
                 .iter()
@@ -8399,7 +8504,8 @@ fn preturn_caverns_top_tutor_states_fast(
                     .copied()
                     .filter(|card| *card != target)
                     .collect(),
-            );
+            )
+            .into();
             next.set_mana([0, 0, 0, 0, 0, 0]);
             next.set_spells_this_turn(0);
             out.push((next, format!("preturn cast {tutor_name} for {target_name}")));
@@ -8928,5 +9034,24 @@ mod tests {
             .battlefield
             .iter()
             .any(|perm| perm.kind_enum() == FastPermKind::Glimmer));
+    }
+
+    #[test]
+    fn persistent_library_clones_share_until_mutated() {
+        let library = PersistentLibrary::from(vec![1, 2, 3, 4]);
+        let mut clone = library.clone();
+        assert!(library.is_shared_with(&clone));
+        assert_eq!(clone.remove(0), 1);
+        assert!(!library.is_shared_with(&clone));
+        assert_eq!(&*library, &[1, 2, 3, 4]);
+        assert_eq!(&*clone, &[2, 3, 4]);
+    }
+
+    #[test]
+    fn shared_variant_context_can_intern_more_than_one_deck_of_candidates() {
+        let names: Vec<String> = (0..140).map(|index| format!("Candidate {index}")).collect();
+        let context = FastContext::with_card_names(&names);
+        assert_eq!(context.card_count(), 140);
+        assert_eq!(context.card_specs.len(), 140);
     }
 }

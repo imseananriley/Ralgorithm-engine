@@ -32,3 +32,7 @@ Every retained pass records:
 - p50, p95, and p99 game latency;
 - games per second at 1, 2, 4, 8, and pod-scale workers;
 - exact parity differences or documented intentional semantic differences.
+
+## Implemented Migration Boundary
+
+The information-state `ReferenceSolver` and `CompiledPolicy` kernels operate only on observable states and explicit chance transitions. They are analytically tested but do not yet generate the complete Nick Fury card-action space. Until that port is complete, production experiments use the fixed-library solver with immutable shared library storage and registry-backed card metadata, and treat its result as an oracle/policy approximation rather than the publication estimand.

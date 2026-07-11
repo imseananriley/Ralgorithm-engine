@@ -2,15 +2,19 @@
 
 mod benchmark;
 mod card_mask;
+mod card_spec;
 mod library;
 mod mana_closure;
 mod metrics;
 mod multifidelity;
+mod policy;
+mod reference_solver;
 mod resource_transition;
 mod state;
 
 pub use benchmark::{bench_nextgen, NextgenBenchReport};
 pub use card_mask::{CardMask, SlotId, MAX_DECK_SLOTS};
+pub use card_spec::{ActionClass, CardFlags, CardMetadata, CardSpec, DeckSpec};
 pub use library::{ChanceDraw, ClassChanceDraw, PackedLibrary, KNOWN_TOP_CAPACITY};
 pub use mana_closure::{
     compute_mana_closure, compute_payment_plans, ManaOption, ManaOutcome, ManaPool, ManaSource,
@@ -18,12 +22,18 @@ pub use mana_closure::{
 };
 pub use metrics::SearchMetrics;
 pub use multifidelity::{Estimate, MultiFidelityAccumulator};
+pub use policy::{evaluate_compiled_policy, CompiledPolicy, PolicyResult};
+pub use reference_solver::{
+    InformationModel, InformationTransition, ReferenceResult, ReferenceSolver,
+};
 pub use resource_transition::apply_payment_plan;
 pub use state::{PackedState, Zone};
 
 #[cfg(test)]
 mod tests {
     use std::mem::size_of;
+
+    use smallvec::{smallvec, SmallVec};
 
     use super::*;
 
@@ -229,5 +239,83 @@ mod tests {
         assert_eq!(result.correction_mean, 0.5);
         assert_eq!(result.mean, 1.25);
         assert!(result.standard_error > 0.0);
+    }
+
+    #[test]
+    fn deck_spec_compiles_exact_slots_and_card_roles() {
+        let payload = include_str!("../../../../fixtures/decks/champion_working_list.json");
+        let value: serde_json::Value =
+            serde_json::from_str(payload).expect("champion fixture JSON");
+        let deck: Vec<String> = value["deck"]
+            .as_array()
+            .expect("deck array")
+            .iter()
+            .map(|card| card.as_str().expect("card name").to_string())
+            .collect();
+        let spec = DeckSpec::compile(&deck).expect("singleton Commander deck compiles");
+        assert_eq!(spec.cards().len(), 99);
+        assert_eq!(spec.card_mask().len(), 99);
+        let rhystic = spec.card(spec.slot("Rhystic Study").expect("Rhystic slot"));
+        assert!(rhystic.flags.contains(CardFlags::ENGINE));
+        assert_eq!(rhystic.action_class, ActionClass::Engine);
+        let tomb = spec.card(spec.slot("Ancient Tomb").expect("Tomb slot"));
+        assert!(tomb.flags.contains(CardFlags::LAND));
+        assert!(tomb.flags.contains(CardFlags::MANA));
+        let demonic = spec.card(spec.slot("Demonic Tutor").expect("Demonic slot"));
+        assert!(demonic.flags.contains(CardFlags::TUTOR));
+        assert_eq!(spec.semantic_classes()[rhystic.slot as usize], rhystic.slot);
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    struct AnalyticInformationModel;
+
+    impl InformationModel for AnalyticInformationModel {
+        type State = u8;
+
+        fn terminal_value(&self, state: Self::State) -> Option<f64> {
+            match state {
+                2 => Some(1.0),
+                3 => Some(0.0),
+                _ => None,
+            }
+        }
+
+        fn transitions(
+            &self,
+            state: Self::State,
+            out: &mut SmallVec<[InformationTransition<Self::State>; 16]>,
+        ) {
+            match state {
+                0 => {
+                    out.push(InformationTransition::Deterministic(1));
+                    out.push(InformationTransition::Deterministic(1));
+                }
+                1 => out.push(InformationTransition::Chance(smallvec![(2, 1.0), (3, 3.0)])),
+                _ => {}
+            }
+        }
+    }
+
+    struct FirstActionPolicy;
+
+    impl CompiledPolicy<u8> for FirstActionPolicy {
+        fn choose(&self, _state: u8, action_count: usize) -> Option<usize> {
+            (action_count > 0).then_some(0)
+        }
+    }
+
+    #[test]
+    fn reference_solver_normalizes_chance_and_hits_transpositions() {
+        let result = ReferenceSolver::new(&AnalyticInformationModel).solve(0, 3);
+        assert!((result.value - 0.25).abs() < f64::EPSILON);
+        assert!(result.metrics.transposition_hits >= 1);
+        assert_eq!(result.metrics.chance_nodes, 1);
+    }
+
+    #[test]
+    fn compiled_policy_uses_the_same_information_chance_model() {
+        let result = evaluate_compiled_policy(&AnalyticInformationModel, &FirstActionPolicy, 0, 3);
+        assert!((result.value - 0.25).abs() < f64::EPSILON);
+        assert_eq!(result.metrics.chance_nodes, 1);
     }
 }
