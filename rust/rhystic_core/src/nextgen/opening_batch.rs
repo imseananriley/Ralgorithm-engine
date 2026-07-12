@@ -58,6 +58,12 @@ pub struct OpeningBatchRequest {
     pub work_chunk_size: u64,
     #[serde(default = "default_policy_bottom_candidate_limit")]
     pub policy_bottom_candidate_limit: usize,
+    #[serde(default = "default_strict_mulligan_pilot_samples")]
+    pub strict_mulligan_pilot_samples: u64,
+    #[serde(default)]
+    pub frozen_low_mulligan_continuation_ev: Vec<[f64; 6]>,
+    #[serde(default)]
+    pub frozen_strict_mulligan_continuation_ev: Vec<[f64; 6]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -69,6 +75,8 @@ pub struct OpeningBatchResponse {
     pub paired_multifidelity_delta: Vec<Option<Estimate>>,
     pub outcomes: Vec<OpeningOutcomeSummary>,
     pub mulligan_continuation_ev: Vec<[f64; 6]>,
+    pub low_mulligan_continuation_ev: Vec<[f64; 6]>,
+    pub strict_mulligan_continuation_ev: Vec<[f64; 6]>,
     pub deck_validation: String,
     pub model_digest: String,
     pub request_digest: String,
@@ -245,15 +253,21 @@ pub fn evaluate_opening_batch(
         .iter()
         .map(|variant| variant.name.clone())
         .collect();
-    let low_mulligans: Vec<_> = variants
-        .iter()
-        .map(|variant| train_mulligan_policy(request, variant, false))
-        .collect();
+    let low_mulligans = frozen_or_train_mulligans(
+        &request.frozen_low_mulligan_continuation_ev,
+        &variants,
+        request,
+        request.mulligan_pilot_samples,
+        false,
+    )?;
     let high_mulligans = if request.strict_reference || request.correction_numerator > 0 {
-        variants
-            .iter()
-            .map(|variant| train_mulligan_policy(request, variant, true))
-            .collect()
+        frozen_or_train_mulligans(
+            &request.frozen_strict_mulligan_continuation_ev,
+            &variants,
+            request,
+            request.strict_mulligan_pilot_samples,
+            true,
+        )?
     } else {
         Vec::new()
     };
@@ -355,13 +369,21 @@ pub fn evaluate_opening_batch(
             .map(|(accumulator, name)| accumulator.summarize(name))
             .collect(),
         mulligan_continuation_ev: if request.strict_reference {
-            high_mulligans
+            high_mulligans.clone()
         } else {
-            low_mulligans
+            low_mulligans.clone()
         }
         .into_iter()
         .map(|policy| policy.continuation_ev)
         .collect(),
+        low_mulligan_continuation_ev: low_mulligans
+            .into_iter()
+            .map(|policy| policy.continuation_ev)
+            .collect(),
+        strict_mulligan_continuation_ev: high_mulligans
+            .into_iter()
+            .map(|policy| policy.continuation_ev)
+            .collect(),
         deck_validation: if request.fixture_mode {
             "fixture: singleton packed slots; minimum seven cards".to_string()
         } else {
@@ -610,12 +632,40 @@ fn evaluate_game(
     unreachable!("the mulligan floor always keeps the final hand")
 }
 
+fn frozen_or_train_mulligans(
+    frozen: &[[f64; 6]],
+    variants: &[CompiledVariant],
+    request: &OpeningBatchRequest,
+    pilot_samples: u64,
+    strict_reference: bool,
+) -> Result<Vec<MulliganEvPolicy>, String> {
+    if !frozen.is_empty() {
+        if frozen.len() != variants.len() {
+            return Err(format!(
+                "frozen mulligan table has {} rows; expected {}",
+                frozen.len(),
+                variants.len()
+            ));
+        }
+        return Ok(frozen
+            .iter()
+            .copied()
+            .map(|continuation_ev| MulliganEvPolicy { continuation_ev })
+            .collect());
+    }
+    Ok(variants
+        .iter()
+        .map(|variant| train_mulligan_policy(request, variant, pilot_samples, strict_reference))
+        .collect())
+}
+
 fn train_mulligan_policy(
     request: &OpeningBatchRequest,
     variant: &CompiledVariant,
+    pilot_samples: u64,
     strict_reference: bool,
 ) -> MulliganEvPolicy {
-    let samples = request.mulligan_pilot_samples.max(1);
+    let samples = pilot_samples.max(1);
     let hand_sizes = [7usize, 7, 6, 5, 4, 3];
     let pilot_seed = request.seed ^ 0x4d55_4c4c_5049_4c4f;
     let mut continuation_ev = [0.0; 6];
@@ -815,6 +865,10 @@ const fn default_policy_bottom_candidate_limit() -> usize {
     4
 }
 
+const fn default_strict_mulligan_pilot_samples() -> u64 {
+    8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -858,12 +912,23 @@ mod tests {
             publication_mode: true,
             work_chunk_size: 2,
             policy_bottom_candidate_limit: 4,
+            strict_mulligan_pilot_samples: 2,
+            frozen_low_mulligan_continuation_ev: Vec::new(),
+            frozen_strict_mulligan_continuation_ev: Vec::new(),
         };
         let left = evaluate_opening_batch(&request).expect("batch");
         let right = evaluate_opening_batch(&request).expect("batch");
         assert_eq!(left.report.next_sample, 30);
         assert_eq!(left.report.summaries, right.report.summaries);
         assert_eq!(left.report.accumulators, right.report.accumulators);
+
+        let mut frozen_request = request.clone();
+        frozen_request.frozen_low_mulligan_continuation_ev =
+            left.low_mulligan_continuation_ev.clone();
+        frozen_request.frozen_strict_mulligan_continuation_ev =
+            left.strict_mulligan_continuation_ev.clone();
+        let frozen = evaluate_opening_batch(&frozen_request).expect("frozen mulligan batch");
+        assert_eq!(left.report.summaries, frozen.report.summaries);
 
         let mut parallel_request = request.clone();
         parallel_request.workers = 2;
@@ -917,6 +982,9 @@ mod tests {
             publication_mode: true,
             work_chunk_size: 2,
             policy_bottom_candidate_limit: 4,
+            strict_mulligan_pilot_samples: 2,
+            frozen_low_mulligan_continuation_ev: Vec::new(),
+            frozen_strict_mulligan_continuation_ev: Vec::new(),
         };
         assert!(evaluate_opening_batch(&request).is_err());
     }
@@ -981,6 +1049,9 @@ mod tests {
             publication_mode: true,
             work_chunk_size: 1,
             policy_bottom_candidate_limit: 4,
+            strict_mulligan_pilot_samples: 1,
+            frozen_low_mulligan_continuation_ev: Vec::new(),
+            frozen_strict_mulligan_continuation_ev: Vec::new(),
         };
         assert!(evaluate_opening_batch(&request)
             .expect_err("short production deck")
@@ -1023,6 +1094,9 @@ mod tests {
             publication_mode: true,
             work_chunk_size: 1,
             policy_bottom_candidate_limit: 4,
+            strict_mulligan_pilot_samples: 1,
+            frozen_low_mulligan_continuation_ev: Vec::new(),
+            frozen_strict_mulligan_continuation_ev: Vec::new(),
         };
         assert!(evaluate_opening_batch(&request)
             .expect_err("unsupported tutor")
