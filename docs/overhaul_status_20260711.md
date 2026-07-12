@@ -1,5 +1,7 @@
 # Overhaul Status And Pre-Fork Benchmark
 
+> Historical generation-seven snapshot. For the current mulligan, bounded-search, multifidelity, validation, and throughput status, see `docs/generation12_correctness_and_speed.md`.
+
 ## Scope
 
 The intended overhaul is the architecture in `docs/architecture.md`: a visible-information production engine with a semantic card registry, fixed-size observable state, explicit chance nodes, a compiled policy, paired batch evaluation, and multifidelity correction.

@@ -12,7 +12,7 @@ Each request supplies one or more slot-aligned variants, a root seed, a resumabl
 
 ## Mulligan And Randomness
 
-The adapter implements the Commander London sequence `7, 7, 6, 5, 4, 3`. The first mulligan is free. Every offered seven-card hand comes from an independently domain-separated ChaCha8 slot permutation shared by all variants. Keep and bottom decisions receive only the visible hand. Bottoms return to the unknown library.
+The adapter implements the Commander London sequence `7, 7, 6, 5, 4, 3`. The first mulligan is free. Every offered seven-card hand comes from an independently domain-separated ChaCha8 slot permutation shared by all variants. Keep and bottom decisions receive only visible information. Bottoms remain a known bottom stack until a shuffle merges them into the unknown library.
 
 Gemstone Caverns live status is sampled once per game at three quarters and is known for every mulligan decision in that game. A live kept Caverns then enumerates visible exile choices. The action policy or reference solver chooses among those starts without observing unknown order.
 
@@ -30,7 +30,7 @@ A release CLI smoke over a deterministic eight-card fixture completed 20 strict-
 
 ## Parallel Execution
 
-The request may select a worker count. Workers receive disjoint contiguous sample ranges and share immutable compiled variants. Mergeable paired moments, multifidelity moments, discordances, and logarithmic latency histograms produce the same statistical summaries as one worker. A regression test compares one- and two-worker accumulators exactly.
+The request may select a worker count. Workers claim disjoint sample chunks from an atomic queue and share immutable compiled variants. Reports are sorted by sample range before merge, preserving reproducible accumulation order while balancing long-tail searches.
 
 A 200-game champion-list policy check produced the same mean score (`0.0805041335`) at every worker count:
 
@@ -44,4 +44,4 @@ This run followed a release build and used short cooldowns, so it is a functiona
 
 ## Remaining Engineering Work
 
-Allocation totals and formal thermally controlled 8-worker and pod-scale curves remain benchmark work. Post-engine interaction/value cards remain inert by design unless they participate in an early engine line; any newly discovered early line must be added with a focused transition test and a legacy differential fixture.
+Generation twelve supersedes the provisional mulligan, outcome, and multifidelity methodology in this document. See `docs/generation12_correctness_and_speed.md`.

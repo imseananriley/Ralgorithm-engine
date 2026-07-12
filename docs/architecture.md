@@ -35,4 +35,4 @@ Every retained pass records:
 
 ## Implemented Migration Boundary
 
-The packed opening batch now provides a production visible-information path for lands, principal artifacts, direct mana, deterministic and random tutors, objective-relevant sacrifice lines, mana creatures, Rhystic Study, and Heartwood Storyteller. It uses explicit chance transitions, a frozen visible policy, paired slot permutations, and independently selected strict corrections. Unsupported post-engine interaction/value cards remain inert. The legacy solver remains the differential and strict-correction oracle for unported early lines.
+The packed opening batch provides a visible-information path for lands, principal artifacts, direct mana, deterministic and random tutors, objective-relevant sacrifice lines, mana creatures, Rhystic Study, and Heartwood Storyteller. It uses explicit chance transitions, pilot-trained nonanticipating mulligan continuation values, paired slot permutations, vector outcomes, bounded strict search, and independently selected strict corrections. Publication mode rejects unsupported opening-relevant cards; post-engine interaction/value cards may remain explicitly inert.
