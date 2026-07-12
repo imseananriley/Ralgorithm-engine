@@ -221,6 +221,7 @@ def main() -> int:
         },
         "current": {
             "hits": len(current_hits),
+            "hit_game_indices": sorted(current_hits),
             "old_hits_recalled": len(current_hits & old_hits),
             "old_hits_missed": sorted(old_hits - current_hits),
             "new_hits_over_prefork": len(current_hits - old_hits),
