@@ -83,6 +83,7 @@ pub struct BatchReport {
     pub latency_p50_micros: u64,
     pub latency_p95_micros: u64,
     pub latency_p99_micros: u64,
+    pub latency_histogram: Vec<u64>,
     pub accumulators: Vec<VariantAccumulator>,
     pub summaries: Vec<VariantSummary>,
     pub discordances: Vec<DiscordanceRecord>,
@@ -122,6 +123,7 @@ impl BatchEvaluator {
         let mut accumulators = vec![VariantAccumulator::default(); variant_names.len()];
         let mut discordances = Vec::new();
         let mut latencies = Vec::with_capacity(self.config.samples as usize);
+        let mut latency_histogram = vec![0u64; 64];
         let end = self.config.sample_start.saturating_add(self.config.samples);
         for sample_index in self.config.sample_start..end {
             let sample_started = Instant::now();
@@ -162,12 +164,12 @@ impl BatchEvaluator {
                     });
                 }
             }
-            latencies.push(
-                sample_started
-                    .elapsed()
-                    .as_micros()
-                    .min(u128::from(u64::MAX)) as u64,
-            );
+            let latency = sample_started
+                .elapsed()
+                .as_micros()
+                .min(u128::from(u64::MAX)) as u64;
+            latencies.push(latency);
+            latency_histogram[latency.max(1).ilog2() as usize] += 1;
             let processed = sample_index - self.config.sample_start + 1;
             if self.config.progress_interval > 0
                 && (processed.is_multiple_of(self.config.progress_interval)
@@ -196,10 +198,76 @@ impl BatchEvaluator {
             latency_p50_micros: quantile(&latencies, 0.50),
             latency_p95_micros: quantile(&latencies, 0.95),
             latency_p99_micros: quantile(&latencies, 0.99),
+            latency_histogram,
             accumulators,
             summaries,
             discordances,
         }
+    }
+}
+
+pub fn merge_batch_reports(
+    variant_names: &[String],
+    reports: Vec<BatchReport>,
+    elapsed_seconds: f64,
+    discordance_limit: usize,
+) -> BatchReport {
+    assert!(!reports.is_empty(), "at least one batch shard is required");
+    let root_seed = reports[0].root_seed;
+    let sample_start = reports
+        .iter()
+        .map(|report| report.sample_start)
+        .min()
+        .unwrap_or(0);
+    let next_sample = reports
+        .iter()
+        .map(|report| report.next_sample)
+        .max()
+        .unwrap_or(sample_start);
+    let mut accumulators = vec![VariantAccumulator::default(); variant_names.len()];
+    let mut histogram = vec![0u64; 64];
+    let mut discordances = Vec::new();
+    for report in reports {
+        assert_eq!(report.root_seed, root_seed);
+        for (total, shard) in accumulators.iter_mut().zip(report.accumulators) {
+            total.samples += shard.samples;
+            total.value_sum += shard.value_sum;
+            total.value_sum_squares += shard.value_sum_squares;
+            total.delta_sum += shard.delta_sum;
+            total.delta_sum_squares += shard.delta_sum_squares;
+            total.successes += shard.successes;
+            total.candidate_only += shard.candidate_only;
+            total.baseline_only += shard.baseline_only;
+            total.influenced += shard.influenced;
+            total.influenced_delta_sum += shard.influenced_delta_sum;
+        }
+        for (total, count) in histogram.iter_mut().zip(report.latency_histogram) {
+            *total += count;
+        }
+        discordances.extend(report.discordances);
+    }
+    discordances.sort_by_key(|record| (record.sample_index, record.variant_index));
+    discordances.truncate(discordance_limit);
+    let total_samples = accumulators.first().map_or(0, |item| item.samples);
+    let summaries = variant_names
+        .iter()
+        .zip(&accumulators)
+        .map(|(name, accumulator)| summarize(name.clone(), accumulator))
+        .collect();
+    BatchReport {
+        root_seed,
+        sample_start,
+        next_sample,
+        elapsed_seconds,
+        games_per_second: total_samples as f64 * variant_names.len() as f64
+            / elapsed_seconds.max(f64::MIN_POSITIVE),
+        latency_p50_micros: histogram_quantile(&histogram, 0.50),
+        latency_p95_micros: histogram_quantile(&histogram, 0.95),
+        latency_p99_micros: histogram_quantile(&histogram, 0.99),
+        latency_histogram: histogram,
+        accumulators,
+        summaries,
+        discordances,
     }
 }
 
@@ -297,6 +365,22 @@ fn quantile(sorted: &[u64], probability: f64) -> u64 {
     }
     let index = ((sorted.len() - 1) as f64 * probability).round() as usize;
     sorted[index]
+}
+
+fn histogram_quantile(histogram: &[u64], probability: f64) -> u64 {
+    let total: u64 = histogram.iter().sum();
+    if total == 0 {
+        return 0;
+    }
+    let target = (total as f64 * probability).ceil() as u64;
+    let mut cumulative = 0;
+    for (bucket, count) in histogram.iter().enumerate() {
+        cumulative += count;
+        if cumulative >= target {
+            return 1u64.checked_shl(bucket as u32 + 1).unwrap_or(u64::MAX);
+        }
+    }
+    u64::MAX
 }
 
 fn sample_seed(root_seed: u64, sample_index: u64) -> u64 {

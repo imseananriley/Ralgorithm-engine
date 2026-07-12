@@ -24,6 +24,22 @@ impl Moments {
             self.m2 / (self.count - 1) as f64
         }
     }
+
+    fn merge(&mut self, other: Self) {
+        if other.count == 0 {
+            return;
+        }
+        if self.count == 0 {
+            *self = other;
+            return;
+        }
+        let combined = self.count + other.count;
+        let delta = other.mean - self.mean;
+        self.m2 +=
+            other.m2 + delta * delta * self.count as f64 * other.count as f64 / combined as f64;
+        self.mean += delta * other.count as f64 / combined as f64;
+        self.count = combined;
+    }
 }
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -81,6 +97,11 @@ impl MultiFidelityAccumulator {
             low_samples: self.low.count,
             correction_samples: self.correction.count,
         })
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        self.low.merge(other.low);
+        self.correction.merge(other.correction);
     }
 }
 

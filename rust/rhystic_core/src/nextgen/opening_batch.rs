@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 
 use super::{
-    evaluate_compiled_policy, independent_sample_selected, slot_permutation, BatchConfig,
-    BatchEvaluation, BatchEvaluator, BatchReport, CardMask, DeckSpec, EngineOpeningModel, Estimate,
-    MultiFidelityAccumulator, OpeningMulliganPolicy, PackedLibrary, PackedStateV2, ReferenceSolver,
-    VisibleOpeningPolicy,
+    evaluate_compiled_policy, independent_sample_selected, merge_batch_reports, slot_permutation,
+    BatchConfig, BatchEvaluation, BatchEvaluator, BatchReport, CardMask, DeckSpec,
+    EngineOpeningModel, Estimate, MultiFidelityAccumulator, OpeningMulliganPolicy, PackedLibrary,
+    PackedStateV2, ReferenceSolver, VisibleOpeningPolicy,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -38,6 +39,8 @@ pub struct OpeningBatchRequest {
     pub correction_numerator: u64,
     #[serde(default = "default_correction_denominator")]
     pub correction_denominator: u64,
+    #[serde(default = "default_workers")]
+    pub workers: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -84,17 +87,78 @@ pub fn evaluate_opening_batch(
         .iter()
         .map(|variant| variant.name.clone())
         .collect();
+    let workers = request.workers.max(1).min(request.samples.max(1) as usize);
+    let started = Instant::now();
+    let outputs = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers);
+        let base = request.samples / workers as u64;
+        let remainder = request.samples % workers as u64;
+        let mut start = request.sample_start;
+        let variants = &variants;
+        let names = &names;
+        for worker in 0..workers {
+            let count = base + u64::from((worker as u64) < remainder);
+            let shard_start = start;
+            start += count;
+            handles
+                .push(scope.spawn(move || run_shard(request, variants, names, shard_start, count)));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("opening batch worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut reports = Vec::with_capacity(outputs.len());
+    let mut multifidelity = vec![MultiFidelityAccumulator::default(); variants.len()];
+    for (report, shard_multifidelity) in outputs {
+        reports.push(report);
+        for (total, shard) in multifidelity.iter_mut().zip(shard_multifidelity) {
+            total.merge(shard);
+        }
+    }
+    let report = if reports.len() == 1 {
+        reports.pop().expect("single report")
+    } else {
+        merge_batch_reports(
+            &names,
+            reports,
+            started.elapsed().as_secs_f64(),
+            request.discordance_limit,
+        )
+    };
+    Ok(OpeningBatchResponse {
+        evaluator: if request.strict_reference {
+            "visible-information reference expectimax".to_string()
+        } else {
+            "compiled visible-information policy".to_string()
+        },
+        mulligan_policy: "commander London 7,7,6,5,4,3; frozen visible-hand v1".to_string(),
+        report,
+        multifidelity: multifidelity
+            .into_iter()
+            .map(MultiFidelityAccumulator::estimate)
+            .collect(),
+    })
+}
+
+fn run_shard(
+    request: &OpeningBatchRequest,
+    variants: &[CompiledVariant],
+    names: &[String],
+    sample_start: u64,
+    samples: u64,
+) -> (BatchReport, Vec<MultiFidelityAccumulator>) {
     let batch = BatchEvaluator::new(BatchConfig {
         root_seed: request.seed,
-        sample_start: request.sample_start,
-        samples: request.samples,
+        sample_start,
+        samples,
         success_threshold: f64::EPSILON,
         discordance_limit: request.discordance_limit,
         progress_interval: request.progress_interval,
     });
     let mulligan = OpeningMulliganPolicy::default();
     let mut multifidelity = vec![MultiFidelityAccumulator::default(); variants.len()];
-    let report = batch.run(&names, |sample_index, sample_seed, variant_index| {
+    let report = batch.run(names, |sample_index, sample_seed, variant_index| {
         let low = evaluate_game(
             &variants[variant_index],
             sample_index,
@@ -124,19 +188,7 @@ pub fn evaluate_opening_batch(
         }
         low
     });
-    Ok(OpeningBatchResponse {
-        evaluator: if request.strict_reference {
-            "visible-information reference expectimax".to_string()
-        } else {
-            "compiled visible-information policy".to_string()
-        },
-        mulligan_policy: "commander London 7,7,6,5,4,3; frozen visible-hand v1".to_string(),
-        report,
-        multifidelity: multifidelity
-            .into_iter()
-            .map(MultiFidelityAccumulator::estimate)
-            .collect(),
-    })
+    (report, multifidelity)
 }
 
 fn evaluate_game(
@@ -234,6 +286,10 @@ const fn default_correction_denominator() -> u64 {
     1
 }
 
+const fn default_workers() -> usize {
+    1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,12 +325,19 @@ mod tests {
             progress_interval: 5,
             correction_numerator: 0,
             correction_denominator: 1,
+            workers: 1,
         };
         let left = evaluate_opening_batch(&request).expect("batch");
         let right = evaluate_opening_batch(&request).expect("batch");
         assert_eq!(left.report.next_sample, 30);
         assert_eq!(left.report.summaries, right.report.summaries);
         assert_eq!(left.report.accumulators, right.report.accumulators);
+
+        let mut parallel_request = request.clone();
+        parallel_request.workers = 2;
+        let parallel = evaluate_opening_batch(&parallel_request).expect("parallel batch");
+        assert_eq!(left.report.summaries, parallel.report.summaries);
+        assert_eq!(left.report.accumulators, parallel.report.accumulators);
 
         let mut corrected_request = request;
         corrected_request.strict_reference = false;
@@ -311,6 +374,7 @@ mod tests {
             progress_interval: 1,
             correction_numerator: 0,
             correction_denominator: 1,
+            workers: 1,
         };
         assert!(evaluate_opening_batch(&request).is_err());
     }

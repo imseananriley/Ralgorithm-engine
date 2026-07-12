@@ -17,8 +17,9 @@ mod state;
 mod state_v2;
 
 pub use batch::{
-    independent_sample_selected, slot_permutation, BatchConfig, BatchEvaluation, BatchEvaluator,
-    BatchReport, DiscordanceRecord, VariantAccumulator, VariantSummary,
+    independent_sample_selected, merge_batch_reports, slot_permutation, BatchConfig,
+    BatchEvaluation, BatchEvaluator, BatchReport, DiscordanceRecord, VariantAccumulator,
+    VariantSummary,
 };
 pub use benchmark::{
     bench_nextgen, bench_opening_model, bench_packed_state_v2, NextgenBenchReport,

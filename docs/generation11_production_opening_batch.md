@@ -28,6 +28,20 @@ This generation also ports Birds of Paradise, Deathrite Shaman, Ragavan, and Tin
 
 A release CLI smoke over a deterministic eight-card fixture completed 20 strict-reference games at 8,668 games/s. It emitted p50/p95/p99 sample latencies of 106/114/286 microseconds, a resumable `next_sample` of 20, and reproducible influence counts.
 
+## Parallel Execution
+
+The request may select a worker count. Workers receive disjoint contiguous sample ranges and share immutable compiled variants. Mergeable paired moments, multifidelity moments, discordances, and logarithmic latency histograms produce the same statistical summaries as one worker. A regression test compares one- and two-worker accumulators exactly.
+
+A 200-game champion-list policy check produced the same mean score (`0.0805041335`) at every worker count:
+
+| Workers | Games/s | Wall time | Speedup |
+| ---: | ---: | ---: | ---: |
+| 1 | 3.50 | 57.13 s | 1.00x |
+| 2 | 5.25 | 38.09 s | 1.50x |
+| 4 | 6.56 | 30.50 s | 1.87x |
+
+This run followed a release build and used short cooldowns, so it is a functional scaling check rather than a thermally controlled publication benchmark. Merged-shard latency quantiles are conservative powers-of-two histogram bounds.
+
 ## Remaining Engineering Work
 
-The packed production path is complete for single-process execution. Parallel worker orchestration remains in the existing shard/run infrastructure rather than this Rust adapter. Allocation totals and formal 1/2/4/8 worker scaling curves remain benchmark work. Post-engine interaction/value cards remain inert by design unless they participate in an early engine line; any newly discovered early line must be added with a focused transition test and a legacy differential fixture.
+Allocation totals and formal thermally controlled 8-worker and pod-scale curves remain benchmark work. Post-engine interaction/value cards remain inert by design unless they participate in an early engine line; any newly discovered early line must be added with a focused transition test and a legacy differential fixture.
