@@ -30,7 +30,8 @@ tmpdir="$(mktemp -d /tmp/ralgorithm-opening.XXXXXX)"
 archive="$(mktemp /tmp/ralgorithm-opening.XXXXXX.tar.gz)"
 trap 'rm -rf "$tmpdir" "$archive"' EXIT
 mkdir -p "$tmpdir/rust" "$tmpdir/fixtures/decks"
-cp -R rust/rhystic_core "$tmpdir/rust/"
+mkdir -p "$tmpdir/rust/rhystic_core"
+rsync -a --exclude target/ rust/rhystic_core/ "$tmpdir/rust/rhystic_core/"
 cp Cargo.toml Cargo.lock "$tmpdir/"
 cp "$DECK_JSON" "$tmpdir/fixtures/decks/deck.json"
 COPYFILE_DISABLE=1 tar --no-xattrs -C "$tmpdir" -czf "$archive" .
