@@ -220,6 +220,21 @@ impl EngineOpeningModel {
         }
     }
 
+    fn library_target_representatives(&self, state: PackedStateV2) -> SmallVec<[SlotId; 32]> {
+        let mut seen = [false; 128];
+        state
+            .library
+            .cards()
+            .iter()
+            .filter(|slot| {
+                let class = usize::from(self.semantic_classes[*slot as usize]);
+                let first = !seen[class];
+                seen[class] = true;
+                first
+            })
+            .collect()
+    }
+
     pub const fn supported_slots(&self) -> CardMask {
         self.supported_slots
     }
@@ -741,7 +756,7 @@ impl EngineOpeningModel {
             if !matches!(fetch.profile.kind, OpeningLandKind::Fetch) {
                 continue;
             }
-            for target_slot in state.library.cards().iter() {
+            for target_slot in self.library_target_representatives(state) {
                 let Some(OpeningCard::Land(target)) = self.card(target_slot) else {
                     continue;
                 };
@@ -1499,7 +1514,7 @@ impl EngineOpeningModel {
                 _ => continue,
             };
             let plans = self.payment_plans(state, cost);
-            for target in state.library.cards().iter() {
+            for target in self.library_target_representatives(state) {
                 if matches!(kind, OpeningSpellKind::EnlightenedTutor)
                     && !self.card_flags[target as usize].contains(CardFlags::ARTIFACT)
                     && !self.card_flags[target as usize].contains(CardFlags::ENCHANTMENT)
@@ -1574,7 +1589,7 @@ impl EngineOpeningModel {
                 continue;
             }
             let plans = self.payment_plans(state, [1, 0, 0, 0, 0, 0]);
-            for target in state.library.cards().iter() {
+            for target in self.library_target_representatives(state) {
                 for plan in &plans {
                     let Some(mut next) = self.apply_payment_plan(state, *plan) else {
                         continue;
@@ -1669,7 +1684,7 @@ impl EngineOpeningModel {
             .filter(|slot| matches!(self.spell_kind(*slot), Some(OpeningSpellKind::Gamble)))
         {
             let plans = self.payment_plans(state, [0, 0, 1, 0, 0, 0]);
-            for target in state.library.cards().iter() {
+            for target in self.library_target_representatives(state) {
                 for plan in &plans {
                     let Some(mut searched) = self.apply_payment_plan(state, *plan) else {
                         continue;
@@ -1749,7 +1764,7 @@ impl EngineOpeningModel {
         {
             let plans = self.payment_plans(state, [1, 1, 0, 0, 0, 0]);
             for led in &leds {
-                for target in state.library.cards().iter() {
+                for target in self.library_target_representatives(state) {
                     for plan in &plans {
                         let Some(mut paid) = self.apply_payment_plan(state, *plan) else {
                             continue;
@@ -1790,10 +1805,14 @@ impl EngineOpeningModel {
             match self.spell_kind(tutor) {
                 Some(OpeningSpellKind::GreenSunsZenith) if state.flags & PRETURN_WINDOW == 0 => {
                     let plans = self.payment_plans(state, [3, 0, 0, 0, 0, 1]);
-                    for target in state.library.cards().iter().filter(|target| {
-                        matches!(self.card(*target), Some(OpeningCard::Engine { .. }))
-                            && self.card_colors[*target as usize] & (1 << 4) != 0
-                    }) {
+                    for target in self
+                        .library_target_representatives(state)
+                        .into_iter()
+                        .filter(|target| {
+                            matches!(self.card(*target), Some(OpeningCard::Engine { .. }))
+                                && self.card_colors[*target as usize] & (1 << 4) != 0
+                        })
+                    {
                         for plan in &plans {
                             let Some(mut next) = self.apply_payment_plan(state, *plan) else {
                                 continue;
@@ -1815,10 +1834,14 @@ impl EngineOpeningModel {
                     }
                 }
                 Some(OpeningSpellKind::SummonersPact) => {
-                    for target in state.library.cards().iter().filter(|target| {
-                        self.card_flags[*target as usize].contains(CardFlags::CREATURE)
-                            && self.card_colors[*target as usize] & (1 << 4) != 0
-                    }) {
+                    for target in self
+                        .library_target_representatives(state)
+                        .into_iter()
+                        .filter(|target| {
+                            self.card_flags[*target as usize].contains(CardFlags::CREATURE)
+                                && self.card_colors[*target as usize] & (1 << 4) != 0
+                        })
+                    {
                         let mut next = state;
                         if !next.move_card(tutor, Zone::Hand, Zone::Exile)
                             || !next.library.remove_known_or_unknown(target)
@@ -1937,7 +1960,7 @@ impl EngineOpeningModel {
                         out.push(InformationTransition::Deterministic(paid));
                         continue;
                     }
-                    for target in state.library.cards().iter() {
+                    for target in self.library_target_representatives(state) {
                         let mut next = paid;
                         if !next.library.remove_known_or_unknown(target) {
                             continue;
@@ -1970,7 +1993,7 @@ impl EngineOpeningModel {
                 .collect();
             let plans = self.payment_plans(state, [0, 0, 0, 0, 0, 1]);
             for sacrificed in &lands {
-                for target in state.library.cards().iter() {
+                for target in self.library_target_representatives(state) {
                     let Some(OpeningCard::Land(target_land)) = self.card(target) else {
                         continue;
                     };
@@ -2070,12 +2093,16 @@ impl EngineOpeningModel {
                     continue;
                 }
                 out.push(InformationTransition::Deterministic(cast));
-                for esper in state.library.cards().iter().filter(|slot| {
-                    matches!(
-                        self.creature_kind(*slot),
-                        Some(OpeningCreatureKind::EsperSentinel)
-                    )
-                }) {
+                for esper in self
+                    .library_target_representatives(state)
+                    .into_iter()
+                    .filter(|slot| {
+                        matches!(
+                            self.creature_kind(*slot),
+                            Some(OpeningCreatureKind::EsperSentinel)
+                        )
+                    })
+                {
                     let mut searched = cast;
                     if searched.library.remove_known_or_unknown(esper) {
                         searched.library.shuffle_all_unknown();
@@ -2103,10 +2130,14 @@ impl EngineOpeningModel {
         }) {
             let plans = self.payment_plans(state, [1, 0, 0, 0, 0, 2]);
             for creature in self.creature_sources(state) {
-                for target in state.library.cards().iter().filter(|target| {
-                    matches!(self.card(*target), Some(OpeningCard::Engine { .. }))
-                        && self.card_colors[*target as usize] & (1 << 4) != 0
-                }) {
+                for target in self
+                    .library_target_representatives(state)
+                    .into_iter()
+                    .filter(|target| {
+                        matches!(self.card(*target), Some(OpeningCard::Engine { .. }))
+                            && self.card_colors[*target as usize] & (1 << 4) != 0
+                    })
+                {
                     for plan in &plans {
                         let Some(mut next) = self.apply_payment_plan(state, *plan) else {
                             continue;
@@ -2420,6 +2451,39 @@ impl InformationModel for EngineOpeningModel {
 impl OpeningOutcomeModel for EngineOpeningModel {
     fn terminal_opening_outcome(&self, state: Self::State) -> Option<OpeningOutcome> {
         self.opening_outcome(state)
+    }
+
+    fn maximum_opening_value(&self, state: Self::State) -> f64 {
+        if Self::turn(state) <= 1 {
+            1.0
+        } else {
+            0.75
+        }
+    }
+
+    fn transition_priority(
+        &self,
+        _state: Self::State,
+        transition: &InformationTransition<Self::State>,
+    ) -> i64 {
+        match transition {
+            InformationTransition::Deterministic(next) => self.visible_policy_score(*next),
+            InformationTransition::Chance(outcomes) => {
+                let total: f64 = outcomes.iter().map(|(_, probability)| probability).sum();
+                if total <= 0.0 {
+                    i64::MIN
+                } else {
+                    (outcomes
+                        .iter()
+                        .map(|(next, probability)| {
+                            probability * self.visible_policy_score(*next) as f64
+                        })
+                        .sum::<f64>()
+                        / total)
+                        .round() as i64
+                }
+            }
+        }
     }
 }
 
@@ -2992,6 +3056,34 @@ mod tests {
         let stacked = stacked.expect("Seal can stack Rhystic");
         assert_eq!(stacked.library.known_top_len(), 1);
         assert!(stacked.library.unknown().contains(3));
+    }
+
+    #[test]
+    fn tutors_collapse_semantically_equivalent_library_targets() {
+        let model = model(&[
+            "Demonic Tutor",
+            "Rhystic Study",
+            "Blank A",
+            "Blank B",
+            "Blank C",
+        ]);
+        let mut state = PackedStateV2 {
+            library: PackedLibrary::new([1, 2, 3, 4].into_iter().collect()),
+            mana: ManaPool([1, 0, 0, 0, 0, 1]),
+            ..PackedStateV2::default()
+        };
+        state.hand.insert(0);
+
+        let representatives = model.library_target_representatives(state);
+        assert_eq!(representatives.len(), 2);
+
+        let mut out = SmallVec::new();
+        model.generate_tutors(state, &mut out);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().any(|transition| matches!(
+            transition,
+            InformationTransition::Deterministic(next) if next.hand.contains(1)
+        )));
     }
 
     #[test]

@@ -7,8 +7,8 @@ use std::time::Instant;
 use super::{
     independent_sample_selected, merge_batch_reports, slot_permutation, ActionClass, BatchConfig,
     BatchEvaluation, BatchEvaluator, BatchReport, CardMask, DeckSpec, EngineOpeningModel, Estimate,
-    MultiFidelityAccumulator, OpeningOutcome, OpeningOutcomePolicySolver, OpeningOutcomeResult,
-    OpeningOutcomeSolver, PackedLibrary, PackedStateV2, SearchMetrics, VisibleOpeningPolicy,
+    MultiFidelityAccumulator, OpeningOutcome, OpeningOutcomeDiscrepancySolver,
+    OpeningOutcomeResult, OpeningOutcomeSolver, PackedLibrary, PackedStateV2, SearchMetrics,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -58,6 +58,10 @@ pub struct OpeningBatchRequest {
     pub work_chunk_size: u64,
     #[serde(default = "default_policy_bottom_candidate_limit")]
     pub policy_bottom_candidate_limit: usize,
+    #[serde(default = "default_policy_discrepancy_budget")]
+    pub policy_discrepancy_budget: u8,
+    #[serde(default = "default_policy_action_candidate_limit")]
+    pub policy_action_candidate_limit: usize,
     #[serde(default = "default_strict_mulligan_pilot_samples")]
     pub strict_mulligan_pilot_samples: u64,
     #[serde(default)]
@@ -101,6 +105,7 @@ pub struct OpeningOutcomeAccumulator {
     pub heartwood_turn_2_sum: f64,
     pub weighted_upper_sum: f64,
     pub capped_samples: u64,
+    pub mulligan_stage_counts: [u64; 6],
     pub search_metrics: SearchMetrics,
 }
 
@@ -117,11 +122,12 @@ pub struct OpeningOutcomeSummary {
     pub any_engine_by_turn_2: f64,
     pub weighted_ev_upper: f64,
     pub capped_rate: f64,
+    pub mulligan_stage_counts: [u64; 6],
     pub search_metrics: SearchMetrics,
 }
 
 impl OpeningOutcomeAccumulator {
-    fn push(&mut self, result: OpeningOutcomeResult) {
+    fn push(&mut self, result: OpeningOutcomeResult, mulligan_stage: u8) {
         let outcome = result.outcome;
         self.samples += 1;
         self.weighted_ev_sum += outcome.weighted_ev;
@@ -131,6 +137,7 @@ impl OpeningOutcomeAccumulator {
         self.heartwood_turn_2_sum += outcome.heartwood_turn_2;
         self.weighted_upper_sum += result.upper_bound;
         self.capped_samples += u64::from(result.capped);
+        self.mulligan_stage_counts[usize::from(mulligan_stage)] += 1;
         self.search_metrics.merge(result.metrics);
     }
 
@@ -143,6 +150,13 @@ impl OpeningOutcomeAccumulator {
         self.heartwood_turn_2_sum += other.heartwood_turn_2_sum;
         self.weighted_upper_sum += other.weighted_upper_sum;
         self.capped_samples += other.capped_samples;
+        for (total, shard) in self
+            .mulligan_stage_counts
+            .iter_mut()
+            .zip(other.mulligan_stage_counts)
+        {
+            *total += shard;
+        }
         self.search_metrics.merge(other.search_metrics);
     }
 
@@ -167,6 +181,7 @@ impl OpeningOutcomeAccumulator {
                 + heartwood_turn_2,
             weighted_ev_upper: self.weighted_upper_sum / n,
             capped_rate: self.capped_samples as f64 / n,
+            mulligan_stage_counts: self.mulligan_stage_counts,
             search_metrics: self.search_metrics,
         }
     }
@@ -180,12 +195,15 @@ struct CompiledVariant {
     influence: CardMask,
     support_manifest: OpeningSupportManifest,
     policy_bottom_candidate_limit: usize,
+    policy_discrepancy_budget: u8,
+    policy_action_candidate_limit: usize,
 }
 
 #[derive(Debug, Copy, Clone)]
 struct OpeningGameEvaluation {
     result: OpeningOutcomeResult,
     influenced: bool,
+    mulligan_stage: u8,
 }
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -245,6 +263,8 @@ pub fn evaluate_opening_batch(
             influence,
             support_manifest,
             policy_bottom_candidate_limit: request.policy_bottom_candidate_limit.max(1),
+            policy_discrepancy_budget: request.policy_discrepancy_budget,
+            policy_action_candidate_limit: request.policy_action_candidate_limit.max(1),
         });
     }
     validate_variant_alignment(request)?;
@@ -343,7 +363,11 @@ pub fn evaluate_opening_batch(
         evaluator: if request.strict_reference {
             "visible-information reference expectimax".to_string()
         } else {
-            "compiled visible-information policy".to_string()
+            format!(
+                "compiled visible-information limited-discrepancy search D={}, actions={}",
+                request.policy_discrepancy_budget,
+                request.policy_action_candidate_limit.max(1)
+            )
         },
         mulligan_policy: if request.strict_reference {
             "commander London 7,7,6,5,4,3; independent-pilot continuation EV; exhaustive bottoms"
@@ -474,6 +498,8 @@ fn model_digest(request: &OpeningBatchRequest) -> String {
         request.exact_slot_draws,
         request.commander_identity_mask,
         request.policy_bottom_candidate_limit,
+        request.policy_discrepancy_budget,
+        request.policy_action_candidate_limit,
         request
             .variants
             .iter()
@@ -554,7 +580,7 @@ fn run_shard(
                 low_mulligans[variant_index]
             },
         );
-        outcomes[variant_index].push(low.result);
+        outcomes[variant_index].push(low.result, low.mulligan_stage);
         multifidelity[variant_index].push_low(low.result.outcome.weighted_ev);
         if variant_index == 0 {
             baseline_low = low.result.outcome.weighted_ev;
@@ -627,7 +653,11 @@ fn evaluate_game(
         if !keep {
             continue;
         }
-        return OpeningGameEvaluation { result, influenced };
+        return OpeningGameEvaluation {
+            result,
+            influenced,
+            mulligan_stage: stage as u8,
+        };
     }
     unreachable!("the mulligan floor always keeps the final hand")
 }
@@ -725,8 +755,8 @@ fn best_keep_outcome(
             |start| solver.solve(start, depth),
         )
     } else {
-        let policy = VisibleOpeningPolicy::new(model);
-        let mut solver = OpeningOutcomePolicySolver::new(model, &policy);
+        let mut solver =
+            OpeningOutcomeDiscrepancySolver::new(model, variant.policy_action_candidate_limit);
         best_keep_outcome_with(
             variant,
             model,
@@ -734,7 +764,7 @@ fn best_keep_outcome(
             hand_size,
             gemstone_live,
             variant.policy_bottom_candidate_limit,
-            |start| solver.solve(start, depth),
+            |start| solver.solve(start, depth, variant.policy_discrepancy_budget),
         )
     }
 }
@@ -865,6 +895,14 @@ const fn default_policy_bottom_candidate_limit() -> usize {
     4
 }
 
+const fn default_policy_discrepancy_budget() -> u8 {
+    1
+}
+
+const fn default_policy_action_candidate_limit() -> usize {
+    2
+}
+
 const fn default_strict_mulligan_pilot_samples() -> u64 {
     8
 }
@@ -912,6 +950,8 @@ mod tests {
             publication_mode: true,
             work_chunk_size: 2,
             policy_bottom_candidate_limit: 4,
+            policy_discrepancy_budget: 2,
+            policy_action_candidate_limit: 4,
             strict_mulligan_pilot_samples: 2,
             frozen_low_mulligan_continuation_ev: Vec::new(),
             frozen_strict_mulligan_continuation_ev: Vec::new(),
@@ -982,6 +1022,8 @@ mod tests {
             publication_mode: true,
             work_chunk_size: 2,
             policy_bottom_candidate_limit: 4,
+            policy_discrepancy_budget: 2,
+            policy_action_candidate_limit: 4,
             strict_mulligan_pilot_samples: 2,
             frozen_low_mulligan_continuation_ev: Vec::new(),
             frozen_strict_mulligan_continuation_ev: Vec::new(),
@@ -1015,6 +1057,8 @@ mod tests {
                 &EngineOpeningModel::compile(&deck, 2),
             ),
             policy_bottom_candidate_limit: 4,
+            policy_discrepancy_budget: 2,
+            policy_action_candidate_limit: 4,
         };
         let visible = (0..7).collect();
 
@@ -1049,6 +1093,8 @@ mod tests {
             publication_mode: true,
             work_chunk_size: 1,
             policy_bottom_candidate_limit: 4,
+            policy_discrepancy_budget: 2,
+            policy_action_candidate_limit: 4,
             strict_mulligan_pilot_samples: 1,
             frozen_low_mulligan_continuation_ev: Vec::new(),
             frozen_strict_mulligan_continuation_ev: Vec::new(),
@@ -1094,6 +1140,8 @@ mod tests {
             publication_mode: true,
             work_chunk_size: 1,
             policy_bottom_candidate_limit: 4,
+            policy_discrepancy_budget: 2,
+            policy_action_candidate_limit: 4,
             strict_mulligan_pilot_samples: 1,
             frozen_low_mulligan_continuation_ev: Vec::new(),
             frozen_strict_mulligan_continuation_ev: Vec::new(),

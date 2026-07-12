@@ -15,6 +15,8 @@ DEPTH="${DEPTH:-14}"
 PILOT_SAMPLES="${PILOT_SAMPLES:-64}"
 WORKERS="${WORKERS:-32}"
 BOTTOM_CANDIDATES="${BOTTOM_CANDIDATES:-1}"
+DISCREPANCY_BUDGET="${DISCREPANCY_BUDGET:-1}"
+ACTION_CANDIDATES="${ACTION_CANDIDATES:-2}"
 
 if [[ -z "$RUNPOD_HOST" || -z "$RUNPOD_PORT" ]]; then
   echo "RUNPOD_HOST and RUNPOD_PORT are required" >&2
@@ -57,7 +59,7 @@ ssh "${ssh_opts[@]}" "$RUNPOD_HOST" "
 binary="$REMOTE_DIR/target/release/rhystic-core-smoke"
 calibration="$OUT_DIR/mulligan_calibration.json"
 if [[ ! -s "$calibration" ]]; then
-  python3 - "$DECK_JSON" "$SEED" "$DEPTH" "$PILOT_SAMPLES" "$WORKERS" "$BOTTOM_CANDIDATES" > "$OUT_DIR/calibration_request.json" <<'PY'
+  python3 - "$DECK_JSON" "$SEED" "$DEPTH" "$PILOT_SAMPLES" "$WORKERS" "$BOTTOM_CANDIDATES" "$DISCREPANCY_BUDGET" "$ACTION_CANDIDATES" > "$OUT_DIR/calibration_request.json" <<'PY'
 import json, sys
 deck = json.load(open(sys.argv[1]))["deck"]
 print(json.dumps({
@@ -70,7 +72,9 @@ print(json.dumps({
     "mulligan_pilot_samples": int(sys.argv[4]), "strict_mulligan_pilot_samples": 1,
     "fixture_mode": False, "commander_identity_mask": 31,
     "publication_mode": True, "work_chunk_size": 1,
-    "policy_bottom_candidate_limit": int(sys.argv[6])
+    "policy_bottom_candidate_limit": int(sys.argv[6]),
+    "policy_discrepancy_budget": int(sys.argv[7]),
+    "policy_action_candidate_limit": int(sys.argv[8])
 }))
 PY
   ssh "${ssh_opts[@]}" "$RUNPOD_HOST" "$binary opening-batch-jsonl" \
@@ -88,7 +92,7 @@ while (( start < SAMPLES )); do
     start=$((start + count))
     continue
   fi
-  python3 - "$DECK_JSON" "$calibration" "$SEED" "$start" "$count" "$DEPTH" "$WORKERS" "$BOTTOM_CANDIDATES" > "$OUT_DIR/current_request.json" <<'PY'
+  python3 - "$DECK_JSON" "$calibration" "$SEED" "$start" "$count" "$DEPTH" "$WORKERS" "$BOTTOM_CANDIDATES" "$DISCREPANCY_BUDGET" "$ACTION_CANDIDATES" > "$OUT_DIR/current_request.json" <<'PY'
 import json, sys
 deck = json.load(open(sys.argv[1]))["deck"]
 calibration = json.load(open(sys.argv[2]))
@@ -103,6 +107,8 @@ print(json.dumps({
     "fixture_mode": False, "commander_identity_mask": 31,
     "publication_mode": True, "work_chunk_size": 1,
     "policy_bottom_candidate_limit": int(sys.argv[8]),
+    "policy_discrepancy_budget": int(sys.argv[9]),
+    "policy_action_candidate_limit": int(sys.argv[10]),
     "frozen_low_mulligan_continuation_ev": calibration["low_mulligan_continuation_ev"]
 }))
 PY
