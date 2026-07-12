@@ -1,48 +1,43 @@
-# Generation 20: Investigation of 13 new confirmed wins
+# Generation 20: Investigation of eight new confirmed wins
 
-## Conclusion
+## Correction
 
-All 13 full-library-confirmed packed witnesses are genuine turn-two lines. After
-fixing one legacy Mox Amber bug and increasing the legacy frontier for capped
-hands, the exact fast engine independently reproduces all 13.
+Mox Amber adds mana of a color among legendary creatures and planeswalkers the
+player controls. It uses their actual colors, not color identity. Nick Fury is
+white, so Nick alone lets Mox Amber make only white.
 
-## Why the legacy engine missed them
+The initial investigation incorrectly treated Nick's five-color identity as five
+Mox Amber colors. Correcting both packed mana paths changes the original 13 new
+confirmations as follows:
 
-- Four games were uncapped legacy failures: 213, 360, 697, and 702.
-- Nine games were capped at the old limit: 174, 344, 436, 493, 518, 638, 743,
-  894, and 919.
-- Every uncapped miss uses Mox Amber after resolving Nick Fury.
+- Games 213, 436, and 702 become probabilistic rather than deterministic.
+- Games 360 and 697 no longer produce packed winning branches through D2.
+- Eight deterministic confirmations remain: 174, 344, 493, 518, 638, 743, 894,
+  and 919.
 
-The legacy engine represented Nick Fury's battlefield color as white and derived
-Mox Amber output from that value. Nick is a white card but has five-color identity,
-so Mox Amber must make any color. Correcting Nick's battlefield identity lets the
-legacy engine find the four uncapped misses plus capped game 894 at 60,000 states.
+## Independent validation
 
-The remaining eight still cap at 60,000 states. At a one-million-state limit, the
-exact engine finds all eight in 2.4 seconds total, confirming that they were
-frontier misses rather than packed-model false positives.
+All eight remaining wins capped in the legacy exact engine at 60,000 states. At a
+one-million-state limit, the corrected exact engine independently finds all eight
+in 2.2 seconds total. They are genuine frontier misses rather than packed-model
+false positives.
 
 ## Witness summary
 
-| Game | Packed tier | Engine | Legacy result | Principal line |
-|---:|---:|---|---|---|
-| 174 | D2 | Heartwood | capped | Mox Diamond, Mystical for GSZ, Nick, Rite, GSZ |
-| 213 | D2 | Heartwood | miss | Mox Diamond, Nick, Mox Amber, Dark Ritual, GSZ |
-| 344 | D1 | Heartwood | capped | Chrome Mox, Nick, fetch Bayou, Vampiric, fetch Tropical |
-| 360 | D2 | Rhystic | miss | Petal, Nick, Mox Amber, Enlightened, Dark Ritual |
-| 436 | D2 | Rhystic | capped | Mox Amber, fetch Hallowed, Nick, Scheming, Glimmervoid |
-| 493 | D2 | Rhystic | capped | fetch Bayou, Vampiric, Sol Ring, Exotic Orchard |
-| 518 | D1 | Rhystic | capped | Scheming, Crop Rotation for Ancient Tomb, second land |
-| 638 | D0 | Rhystic | capped | Mox Diamond, Vampiric, Nick, fetch Hallowed |
-| 697 | D0 | Rhystic | miss | Nick, Mox Amber, turn-two Tinder Wall |
-| 702 | D0 | Heartwood | miss | Nick, Mox Amber, Tinder Wall, GSZ |
-| 743 | D1 | Heartwood | capped | Vampiric, two lands, Elvish Spirit Guide |
-| 894 | D0 | Heartwood | capped | Mox Diamond, Scheming, Nick, Mox Amber |
-| 919 | D1 | Rhystic | capped | Imperial Seal, City of Brass, City of Traitors |
+| Game | Packed tier | Engine | Principal line |
+|---:|---:|---|---|
+| 174 | D2 | Heartwood | Mox Diamond, Mystical for GSZ, Nick, Rite, GSZ |
+| 344 | D1 | Heartwood | Chrome Mox, Nick, fetch Bayou, Vampiric, fetch Tropical |
+| 493 | D2 | Rhystic | fetch Bayou, Vampiric, Sol Ring, Exotic Orchard |
+| 518 | D1 | Rhystic | Scheming, Crop Rotation for Ancient Tomb, second land |
+| 638 | D0 | Rhystic | Mox Diamond, Vampiric, Nick, fetch Hallowed |
+| 743 | D1 | Heartwood | Vampiric, two lands, Elvish Spirit Guide |
+| 894 | D0 | Heartwood | Mox Diamond, Scheming, Nick, Mox Amber |
+| 919 | D1 | Rhystic | Imperial Seal, City of Brass, City of Traitors |
 
-All 13 resolve on turn two. Seven resolve Rhystic Study and six resolve Heartwood
-Storyteller. Ten use a top-deck tutor, nine cast Nick Fury, six use Mox Amber, and
-four use Mox Diamond.
+All eight resolve on turn two: four Rhystic Study and four Heartwood Storyteller.
+All eight use a top-deck tutor, four cast Nick Fury, three use Mox Diamond, and one
+uses Mox Amber.
 
 ## Notable lines
 
@@ -50,14 +45,9 @@ Game 518 is the previously identified Crop Rotation line: cast Scheming Symmetry
 then on turn two tap and sacrifice City of Brass to Crop Rotation for Ancient
 Tomb, play Forbidden Orchard, and cast Rhystic Study.
 
-Game 697 demonstrates the legacy Mox Amber issue compactly. City of Brass casts
-Nick on turn one. On turn two City casts Tinder Wall, Mox Amber makes blue, and
-Tinder Wall supplies the two generic mana for Rhystic Study.
-
-Game 702 draws a nominal 1/91 unknown card after a fetch shuffle, but the card is
-never used. The line wins with Hallowed Fountain, Mox Amber, and Tinder Wall for
-Green Sun's Zenith regardless of that draw, so full-library validation correctly
-classifies it as deterministic.
+Game 894 remains legal under the corrected Mox Amber rule. Mox Amber supplies
+white toward Heartwood's generic mana, while Mox Diamond and Gemstone Mine supply
+the two green mana.
 
 The witnesses for games 493 and 743 cast Noxious Revival after drawing the engine.
 That action is unnecessary to the final engine resolution; the witnesses are
@@ -65,7 +55,7 @@ valid but not action-minimal.
 
 ## Engineering result
 
-The legacy Nick Fury permanent now carries five-color identity for Mox Amber
-generation while remaining a white card for casting and imprint rules. A
-regression test requires Mox Amber to expose all five colors with Nick on the
-battlefield.
+Nick remains white in both engines. Mox Amber derives available mana from actual
+legendary permanent colors. The packed engine now uses one shared color helper for
+direct payment planning and explicit artifact activation, and tests require Nick
+to enable only white from Mox Amber.

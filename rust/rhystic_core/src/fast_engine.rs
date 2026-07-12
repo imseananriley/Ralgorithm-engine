@@ -2348,7 +2348,7 @@ fn generate_fast_commander_actions(
     }
     for mana in pay_options(state.mana(), [0, 0, 0, 0, 1, 0]) {
         let mut next = state.clone();
-        let nick = make_perm(ctx, FastPermKind::Nick, false, color_mask("WUBRG"), true, 0);
+        let nick = make_perm(ctx, FastPermKind::Nick, false, color_mask("W"), true, 0);
         next.push_perm(ctx, nick);
         next.set_mana(mana);
         actions.push(FastAction::new(
@@ -10356,14 +10356,14 @@ mod tests {
     }
 
     #[test]
-    fn nick_fury_enables_all_mox_amber_colors() {
+    fn nick_fury_enables_only_white_from_mox_amber() {
         let mut context = FastContext::with_card_names(["Mox Amber"]);
         let mut state = FastState::from_fixture(&mut context, &fixture_state(Vec::new()));
         let nick = make_perm(
             &mut context,
             FastPermKind::Nick,
             false,
-            color_mask("WUBRG"),
+            color_mask("W"),
             false,
             0,
         );
@@ -10378,7 +10378,8 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(colors, vec![0, 1, 2, 3, 4]);
+        assert_eq!(nick.colors(), color_mask("W"));
+        assert_eq!(colors, vec![3]);
     }
 
     #[test]

@@ -812,6 +812,20 @@ impl EngineOpeningModel {
             .count()
     }
 
+    fn mox_amber_colors(&self, state: PackedStateV2) -> u8 {
+        let mut colors = 0;
+        if state.commander.zone == CommanderZone::Battlefield {
+            colors |= 1 << 3;
+        }
+        for legendary in state.battlefield.as_slice().iter().filter_map(|permanent| {
+            let slot = permanent.source().card_slot()?;
+            matches!(self.creature_kind(slot), Some(OpeningCreatureKind::Ragavan)).then_some(slot)
+        }) {
+            colors |= self.card_colors[legendary as usize];
+        }
+        colors
+    }
+
     fn generate_artifact_casts(
         &self,
         state: PackedStateV2,
@@ -958,10 +972,8 @@ impl EngineOpeningModel {
                 OpeningArtifactKind::MoxOpal if self.artifact_count(state) >= 3 => {
                     (mana_options(0b1_1111, 0), false, false)
                 }
-                OpeningArtifactKind::MoxAmber
-                    if state.commander.zone == CommanderZone::Battlefield =>
-                {
-                    (mana_options(0b1_1111, 0), false, false)
+                OpeningArtifactKind::MoxAmber if self.mox_amber_colors(state) != 0 => {
+                    (mana_options(self.mox_amber_colors(state), 0), false, false)
                 }
                 OpeningArtifactKind::SolRing => (
                     smallvec::smallvec![ManaPool([0, 0, 0, 0, 0, 2])],
@@ -1246,10 +1258,12 @@ impl EngineOpeningModel {
                 OpeningArtifactKind::MoxOpal if self.artifact_count(state) >= 3 => {
                     (mana_options(0b1_1111, 0), ResourceUse::Tap)
                 }
-                OpeningArtifactKind::MoxAmber
-                    if state.commander.zone == CommanderZone::Battlefield =>
-                {
-                    (mana_options(0b1_1111, 0), ResourceUse::Tap)
+                OpeningArtifactKind::MoxAmber => {
+                    let colors = self.mox_amber_colors(state);
+                    if colors == 0 {
+                        continue;
+                    }
+                    (mana_options(colors, 0), ResourceUse::Tap)
                 }
                 OpeningArtifactKind::SolRing => (
                     smallvec::smallvec![ManaPool([0, 0, 0, 0, 0, 2])],
@@ -2940,7 +2954,7 @@ mod tests {
     }
 
     #[test]
-    fn mox_amber_uses_a_cast_commander_color_identity() {
+    fn mox_amber_uses_a_legendary_permanents_colors() {
         let model = model(&["Mox Amber"]);
         let mut state = PackedStateV2::default();
         state.mana = ManaPool([0, 0, 0, 1, 0, 0]);
@@ -2954,7 +2968,11 @@ mod tests {
         };
         let mut mana = SmallVec::new();
         model.generate_artifact_mana(with_commander, &mut mana);
-        assert_eq!(mana.len(), 5);
+        assert_eq!(mana.len(), 1);
+        let InformationTransition::Deterministic(white_mana) = mana[0] else {
+            panic!("Mox Amber activation must be deterministic");
+        };
+        assert_eq!(white_mana.mana, ManaPool([0, 0, 0, 1, 0, 0]));
     }
 
     #[test]
