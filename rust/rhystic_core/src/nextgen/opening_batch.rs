@@ -458,12 +458,33 @@ fn model_digest(request: &OpeningBatchRequest) -> String {
             .map(|variant| (&variant.name, &variant.deck))
             .collect::<Vec<_>>(),
     );
-    digest_bytes(&serde_json::to_vec(&model_input).expect("model digest input serializes"))
+    let input = serde_json::to_vec(&model_input).expect("model digest input serializes");
+    let sources: [&[u8]; 9] = [
+        include_bytes!("opening_batch.rs"),
+        include_bytes!("opening_model.rs"),
+        include_bytes!("outcome.rs"),
+        include_bytes!("library.rs"),
+        include_bytes!("state_v2.rs"),
+        include_bytes!("card_spec.rs"),
+        include_bytes!("mana_closure.rs"),
+        include_bytes!("multifidelity.rs"),
+        include_bytes!("batch.rs"),
+    ];
+    let mut hasher = Blake2bVar::new(16).expect("valid digest size");
+    hasher.update(&input);
+    for source in sources {
+        hasher.update(source);
+    }
+    finalize_digest(hasher)
 }
 
 fn digest_bytes(bytes: &[u8]) -> String {
     let mut hasher = Blake2bVar::new(16).expect("valid digest size");
     hasher.update(bytes);
+    finalize_digest(hasher)
+}
+
+fn finalize_digest(hasher: Blake2bVar) -> String {
     let mut digest = [0; 16];
     hasher
         .finalize_variable(&mut digest)
