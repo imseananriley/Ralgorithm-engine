@@ -521,6 +521,19 @@ pub struct DeckSpec {
     card_mask: CardMask,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+struct SemanticKey {
+    color_mask: u8,
+    flags: CardFlags,
+    action_templates: ActionTemplateMask,
+    payment_gate_costs: [Option<Cost>; 2],
+    opening_mana: OpeningManaProfile,
+    opening_artifact: OpeningArtifactKind,
+    opening_spell: OpeningSpellKind,
+    opening_creature: OpeningCreatureKind,
+    special: u8,
+}
+
 impl DeckSpec {
     pub fn compile(names: &[String]) -> Result<Self, String> {
         if names.len() > MAX_DECK_SLOTS {
@@ -542,6 +555,28 @@ impl DeckSpec {
             }
             cards.push(CardSpec::compile(slot, name));
             card_mask.insert(slot);
+        }
+        let mut classes = FxHashMap::default();
+        let mut next_class = 0u8;
+        for card in &mut cards {
+            let key = SemanticKey {
+                color_mask: card.color_mask,
+                flags: card.flags,
+                action_templates: card.action_templates,
+                payment_gate_costs: card.payment_gate_costs,
+                opening_mana: card.opening_mana,
+                opening_artifact: card.opening_artifact,
+                opening_spell: card.opening_spell,
+                opening_creature: card.opening_creature,
+                special: u8::from(card.name.as_ref() == "Angel's Grace"),
+            };
+            card.semantic_class = *classes.entry(key).or_insert_with(|| {
+                let class = next_class;
+                next_class = next_class
+                    .checked_add(1)
+                    .expect("semantic classes fit packed slot ids");
+                class
+            });
         }
         Ok(Self {
             cards: cards.into_boxed_slice(),

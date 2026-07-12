@@ -44,6 +44,8 @@ pub struct EngineOpeningModel {
     resource_microsteps: bool,
     deathrite_external_land: bool,
     angels_grace_slot: Option<SlotId>,
+    semantic_classes: [u8; 128],
+    quotient_draws: bool,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -132,6 +134,8 @@ impl EngineOpeningModel {
             resource_microsteps: false,
             deathrite_external_land: true,
             angels_grace_slot,
+            semantic_classes: deck.semantic_classes(),
+            quotient_draws: true,
         }
     }
 
@@ -148,6 +152,39 @@ impl EngineOpeningModel {
     pub fn with_deathrite_external_land(mut self, available: bool) -> Self {
         self.deathrite_external_land = available;
         self
+    }
+
+    pub fn with_quotient_draws(mut self, enabled: bool) -> Self {
+        self.quotient_draws = enabled;
+        self
+    }
+
+    fn chance_draws(&self, state: PackedStateV2) -> SmallVec<[(SlotId, f64); 16]> {
+        if self.quotient_draws {
+            state
+                .library
+                .class_chance_draws(&self.semantic_classes)
+                .into_iter()
+                .map(|draw| {
+                    (
+                        draw.representative,
+                        f64::from(draw.numerator) / f64::from(draw.denominator),
+                    )
+                })
+                .collect()
+        } else {
+            state
+                .library
+                .chance_draws()
+                .into_iter()
+                .map(|draw| {
+                    (
+                        draw.slot,
+                        f64::from(draw.numerator) / f64::from(draw.denominator),
+                    )
+                })
+                .collect()
+        }
     }
 
     pub const fn supported_slots(&self) -> CardMask {
@@ -266,8 +303,35 @@ impl EngineOpeningModel {
                 .map(|mana| u16::from(*mana))
                 .sum::<u16>(),
         ) * 320;
+        for source in self.payment_sources(state) {
+            let best_quantity = source
+                .options
+                .iter()
+                .map(|option| {
+                    option
+                        .mana
+                        .0
+                        .iter()
+                        .map(|amount| u16::from(*amount))
+                        .sum::<u16>()
+                })
+                .max()
+                .unwrap_or(0);
+            score += i64::from(best_quantity) * 190;
+            if source
+                .options
+                .iter()
+                .any(|option| option.mana.0[2] > 0 || option.mana.0[4] > 0)
+            {
+                score += 70;
+            }
+        }
         score += state.battlefield.len() as i64 * 35;
         score -= state.hand.len() as i64;
+        if state.library.known_top_len() > 0 {
+            let top = state.library.chance_draws()[0].slot;
+            score += self.card_policy_value(top, true);
+        }
         for slot in state.hand.iter() {
             match self.card(slot) {
                 Some(OpeningCard::Engine { cost, .. }) => {
@@ -303,10 +367,54 @@ impl EngineOpeningModel {
                         OpeningArtifactKind::None => 0,
                     };
                 }
+                Some(OpeningCard::Spell(_)) | Some(OpeningCard::Creature(_)) => {
+                    score += self.card_policy_value(slot, false);
+                }
                 _ => {}
             }
         }
         score
+    }
+
+    fn card_policy_value(&self, slot: SlotId, known_top: bool) -> i64 {
+        let scale = if known_top { 3 } else { 1 };
+        let value = match self.card(slot) {
+            Some(OpeningCard::Engine { .. }) => 1_800,
+            Some(OpeningCard::Spell(kind)) => match kind {
+                OpeningSpellKind::DemonicTutor
+                | OpeningSpellKind::ImperialSeal
+                | OpeningSpellKind::VampiricTutor
+                | OpeningSpellKind::EnlightenedTutor
+                | OpeningSpellKind::SchemingSymmetry
+                | OpeningSpellKind::MysticalTutor
+                | OpeningSpellKind::GreenSunsZenith
+                | OpeningSpellKind::SummonersPact
+                | OpeningSpellKind::DiabolicIntent
+                | OpeningSpellKind::EldritchEvolution => 700,
+                OpeningSpellKind::DarkRitual
+                | OpeningSpellKind::RiteOfFlame
+                | OpeningSpellKind::Manamorphose
+                | OpeningSpellKind::CropRotation
+                | OpeningSpellKind::CullingTheWeak
+                | OpeningSpellKind::InfernalPlunge
+                | OpeningSpellKind::RainOfFilth
+                | OpeningSpellKind::ElvishSpiritGuide
+                | OpeningSpellKind::SimianSpiritGuide => 300,
+                OpeningSpellKind::Gamble | OpeningSpellKind::NoxiousRevival => 250,
+                OpeningSpellKind::None => 0,
+            },
+            Some(OpeningCard::Creature(kind)) => match kind {
+                OpeningCreatureKind::BirdsOfParadise
+                | OpeningCreatureKind::DeathriteShaman
+                | OpeningCreatureKind::TinderWall => 300,
+                OpeningCreatureKind::Ragavan => 220,
+                OpeningCreatureKind::None => 0,
+            },
+            Some(OpeningCard::Land(land)) => 180 + i64::from(land.profile.colorless) * 50,
+            Some(OpeningCard::Artifact(_)) => 250,
+            Some(OpeningCard::Inert) | None => 0,
+        };
+        value * scale
     }
 
     fn visible_hand_score(&self, state: PackedStateV2) -> i32 {
@@ -1331,19 +1439,16 @@ impl EngineOpeningModel {
                         produced[left_color] += 1;
                         produced[right_color] += 1;
                         next.mana = next.mana.add_capped(ManaPool(produced), 15);
-                        let draws = next.library.chance_draws();
+                        let draws = self.chance_draws(next);
                         if draws.is_empty() {
                             out.push(InformationTransition::Deterministic(next));
                             continue;
                         }
                         let outcomes = draws
                             .into_iter()
-                            .filter_map(|draw| {
+                            .filter_map(|(slot, probability)| {
                                 let mut drawn = next;
-                                drawn.draw(draw.slot).then_some((
-                                    drawn,
-                                    f64::from(draw.numerator) / f64::from(draw.denominator),
-                                ))
+                                drawn.draw(slot).then_some((drawn, probability))
                             })
                             .collect();
                         out.push(InformationTransition::Chance(outcomes));
@@ -1973,19 +2078,16 @@ impl EngineOpeningModel {
     ) {
         let mut next = state;
         next.flags |= TURN_DRAW_DONE;
-        let draws = next.library.chance_draws();
+        let draws = self.chance_draws(next);
         if draws.is_empty() {
             out.push(InformationTransition::Deterministic(next));
             return;
         }
         let outcomes = draws
             .into_iter()
-            .filter_map(|draw| {
+            .filter_map(|(slot, probability)| {
                 let mut drawn = next;
-                drawn.draw(draw.slot).then_some((
-                    drawn,
-                    f64::from(draw.numerator) / f64::from(draw.denominator),
-                ))
+                drawn.draw(slot).then_some((drawn, probability))
             })
             .collect();
         out.push(InformationTransition::Chance(outcomes));
@@ -2475,6 +2577,31 @@ mod tests {
             policy.choose(PackedStateV2::default(), &transitions),
             Some(1)
         );
+    }
+
+    #[test]
+    fn visible_policy_values_the_card_selected_by_a_top_tutor() {
+        let model = model(&["Imperial Seal", "Rhystic Study", "Blank"]);
+        let policy = VisibleOpeningPolicy::new(&model);
+        let state = PackedStateV2 {
+            hand: [0].into_iter().collect(),
+            library: PackedLibrary::new([1, 2].into_iter().collect()),
+            mana: ManaPool([1, 0, 0, 0, 0, 0]),
+            flags: TURN_DRAW_DONE,
+            ..PackedStateV2::default()
+        };
+        let mut transitions = SmallVec::new();
+        model.transitions(state, &mut transitions);
+        let chosen = policy
+            .choose(state, &transitions)
+            .and_then(|index| transitions.get(index))
+            .expect("policy action");
+        assert!(matches!(
+            chosen,
+            InformationTransition::Deterministic(next)
+                if next.library.known_top_len() == 1
+                    && next.library.chance_draws()[0].slot == 1
+        ));
     }
 
     #[test]

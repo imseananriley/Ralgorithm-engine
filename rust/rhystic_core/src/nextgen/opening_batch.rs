@@ -41,6 +41,8 @@ pub struct OpeningBatchRequest {
     pub correction_denominator: u64,
     #[serde(default = "default_workers")]
     pub workers: usize,
+    #[serde(default)]
+    pub exact_slot_draws: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -53,6 +55,7 @@ pub struct OpeningBatchResponse {
 
 struct CompiledVariant {
     model: EngineOpeningModel,
+    reference_model: EngineOpeningModel,
     deck_mask: CardMask,
     deck_len: usize,
     influence: CardMask,
@@ -76,7 +79,10 @@ pub fn evaluate_opening_batch(
         let deck = DeckSpec::compile(&variant.deck)?;
         let influence = variant.influence_slots.iter().copied().collect();
         variants.push(CompiledVariant {
-            model: EngineOpeningModel::compile(&deck, request.max_turn),
+            model: EngineOpeningModel::compile(&deck, request.max_turn)
+                .with_quotient_draws(!request.exact_slot_draws),
+            reference_model: EngineOpeningModel::compile(&deck, request.max_turn)
+                .with_quotient_draws(false),
             deck_mask: deck.card_mask(),
             deck_len: deck.cards().len(),
             influence,
@@ -199,6 +205,11 @@ fn evaluate_game(
     strict_reference: bool,
     mulligan: OpeningMulliganPolicy,
 ) -> BatchEvaluation {
+    let model = if strict_reference {
+        &variant.reference_model
+    } else {
+        &variant.model
+    };
     let gemstone_live = !sample_seed.is_multiple_of(4);
     let hand_sizes = [7usize, 7, 6, 5, 4, 3];
     let mut influenced = false;
@@ -215,15 +226,12 @@ fn evaluate_game(
             library: PackedLibrary::new(variant.deck_mask.difference(visible)),
             ..PackedStateV2::default()
         };
-        let keep = hand_size == 3
-            || variant
-                .model
-                .should_keep(mulligan, visible_state, hand_size);
+        let keep = hand_size == 3 || model.should_keep(mulligan, visible_state, hand_size);
         if !keep {
             continue;
         }
         let mut bottom_order: Vec<_> = visible.iter().collect();
-        bottom_order.sort_by_key(|slot| (variant.model.bottom_priority(*slot), *slot));
+        bottom_order.sort_by_key(|slot| (model.bottom_priority(*slot), *slot));
         let mut hand = visible;
         for bottom in bottom_order.into_iter().take(7 - hand_size) {
             hand.remove(bottom);
@@ -233,23 +241,15 @@ fn evaluate_game(
             library: PackedLibrary::new(variant.deck_mask.difference(hand)),
             ..PackedStateV2::default()
         };
-        let value = variant
-            .model
+        let value = model
             .pregame_states(state, gemstone_live)
             .into_iter()
             .map(|start| {
                 if strict_reference {
-                    ReferenceSolver::new(&variant.model)
-                        .solve(start, depth)
-                        .value
+                    ReferenceSolver::new(model).solve(start, depth).value
                 } else {
-                    evaluate_compiled_policy(
-                        &variant.model,
-                        &VisibleOpeningPolicy::new(&variant.model),
-                        start,
-                        depth,
-                    )
-                    .value
+                    evaluate_compiled_policy(model, &VisibleOpeningPolicy::new(model), start, depth)
+                        .value
                 }
             })
             .fold(0.0, f64::max);
@@ -326,6 +326,7 @@ mod tests {
             correction_numerator: 0,
             correction_denominator: 1,
             workers: 1,
+            exact_slot_draws: false,
         };
         let left = evaluate_opening_batch(&request).expect("batch");
         let right = evaluate_opening_batch(&request).expect("batch");
@@ -375,6 +376,7 @@ mod tests {
             correction_numerator: 0,
             correction_denominator: 1,
             workers: 1,
+            exact_slot_draws: false,
         };
         assert!(evaluate_opening_batch(&request).is_err());
     }

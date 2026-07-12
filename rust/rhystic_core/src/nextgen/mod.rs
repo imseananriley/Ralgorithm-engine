@@ -235,6 +235,7 @@ mod tests {
         ])
         .expect("opening model deck");
         let model = EngineOpeningModel::compile(&deck, 2);
+        let exact_model = EngineOpeningModel::compile(&deck, 2).with_quotient_draws(false);
         let mut state = PackedStateV2 {
             library: PackedLibrary::new([1, 3, 4].into_iter().collect()),
             ..PackedStateV2::default()
@@ -242,7 +243,10 @@ mod tests {
         state.hand = [0, 2].into_iter().collect();
 
         let result = ReferenceSolver::new(&model).solve(state, 12);
+        let exact = ReferenceSolver::new(&exact_model).solve(state, 12);
         assert!((result.value - 0.5).abs() < 1e-12);
+        assert_eq!(result.value, exact.value);
+        assert!(result.metrics.states_expanded < exact.metrics.states_expanded);
         assert!(result.metrics.chance_nodes > 0);
     }
 
@@ -646,7 +650,12 @@ mod tests {
         assert!(tomb.flags.contains(CardFlags::MANA));
         let demonic = spec.card(spec.slot("Demonic Tutor").expect("Demonic slot"));
         assert!(demonic.flags.contains(CardFlags::TUTOR));
-        assert_eq!(spec.semantic_classes()[rhystic.slot as usize], rhystic.slot);
+        let heartwood = spec.card(spec.slot("Heartwood Storyteller").expect("Heartwood slot"));
+        assert_eq!(
+            spec.semantic_classes()[rhystic.slot as usize],
+            rhystic.semantic_class
+        );
+        assert_ne!(rhystic.semantic_class, heartwood.semantic_class);
     }
 
     #[derive(Debug, Copy, Clone)]
