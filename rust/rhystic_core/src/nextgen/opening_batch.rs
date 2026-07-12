@@ -53,6 +53,7 @@ pub struct OpeningBatchResponse {
     pub mulligan_policy: String,
     pub report: BatchReport,
     pub multifidelity: Vec<Option<Estimate>>,
+    pub paired_multifidelity_delta: Vec<Option<Estimate>>,
     pub outcomes: Vec<OpeningOutcomeSummary>,
     pub mulligan_continuation_ev: Vec<[f64; 6]>,
 }
@@ -230,10 +231,17 @@ pub fn evaluate_opening_batch(
     });
     let mut reports = Vec::with_capacity(outputs.len());
     let mut multifidelity = vec![MultiFidelityAccumulator::default(); variants.len()];
+    let mut paired_multifidelity = vec![MultiFidelityAccumulator::default(); variants.len()];
     let mut outcomes = vec![OpeningOutcomeAccumulator::default(); variants.len()];
-    for (report, shard_multifidelity, shard_outcomes) in outputs {
+    for (report, shard_multifidelity, shard_paired_multifidelity, shard_outcomes) in outputs {
         reports.push(report);
         for (total, shard) in multifidelity.iter_mut().zip(shard_multifidelity) {
+            total.merge(shard);
+        }
+        for (total, shard) in paired_multifidelity
+            .iter_mut()
+            .zip(shard_paired_multifidelity)
+        {
             total.merge(shard);
         }
         for (total, shard) in outcomes.iter_mut().zip(shard_outcomes) {
@@ -264,6 +272,10 @@ pub fn evaluate_opening_batch(
             .into_iter()
             .map(MultiFidelityAccumulator::estimate)
             .collect(),
+        paired_multifidelity_delta: paired_multifidelity
+            .into_iter()
+            .map(MultiFidelityAccumulator::estimate)
+            .collect(),
         outcomes: outcomes
             .into_iter()
             .zip(names.clone())
@@ -291,6 +303,7 @@ fn run_shard(
 ) -> (
     BatchReport,
     Vec<MultiFidelityAccumulator>,
+    Vec<MultiFidelityAccumulator>,
     Vec<OpeningOutcomeAccumulator>,
 ) {
     let batch = BatchEvaluator::new(BatchConfig {
@@ -302,7 +315,10 @@ fn run_shard(
         progress_interval: request.progress_interval,
     });
     let mut multifidelity = vec![MultiFidelityAccumulator::default(); variants.len()];
+    let mut paired_multifidelity = vec![MultiFidelityAccumulator::default(); variants.len()];
     let mut outcomes = vec![OpeningOutcomeAccumulator::default(); variants.len()];
+    let mut baseline_low = 0.0;
+    let mut baseline_high = 0.0;
     let report = batch.run(names, |sample_index, sample_seed, variant_index| {
         let low = evaluate_game(
             &variants[variant_index],
@@ -318,14 +334,19 @@ fn run_shard(
         );
         outcomes[variant_index].push(low.result);
         multifidelity[variant_index].push_low(low.result.outcome.weighted_ev);
-        if !request.strict_reference
+        if variant_index == 0 {
+            baseline_low = low.result.outcome.weighted_ev;
+        }
+        let low_delta = low.result.outcome.weighted_ev - baseline_low;
+        paired_multifidelity[variant_index].push_low(low_delta);
+        let corrected = !request.strict_reference
             && independent_sample_selected(
                 request.seed,
                 sample_index,
                 request.correction_numerator,
                 request.correction_denominator,
-            )
-        {
+            );
+        if corrected {
             let high = evaluate_game(
                 &variants[variant_index],
                 sample_index,
@@ -338,13 +359,18 @@ fn run_shard(
                 low.result.outcome.weighted_ev,
                 high.result.outcome.weighted_ev,
             );
+            if variant_index == 0 {
+                baseline_high = high.result.outcome.weighted_ev;
+            }
+            paired_multifidelity[variant_index]
+                .push_correction(low_delta, high.result.outcome.weighted_ev - baseline_high);
         }
         BatchEvaluation {
             value: low.result.outcome.weighted_ev,
             influenced: low.influenced,
         }
     });
-    (report, multifidelity, outcomes)
+    (report, multifidelity, paired_multifidelity, outcomes)
 }
 
 fn evaluate_game(
@@ -613,6 +639,9 @@ mod tests {
         let estimate = corrected.multifidelity[0].expect("all samples corrected");
         assert_eq!(estimate.low_samples, 10);
         assert_eq!(estimate.correction_samples, 10);
+        let paired = corrected.paired_multifidelity_delta[0].expect("paired baseline");
+        assert_eq!(paired.mean, 0.0);
+        assert_eq!(paired.standard_error, 0.0);
     }
 
     #[test]
