@@ -244,6 +244,7 @@ pub enum OpeningSpellKind {
     RainOfFilth = 19,
     MysticalTutor = 20,
     EldritchEvolution = 21,
+    AnOfferYouCantRefuse = 22,
 }
 
 fn opening_spell_kind(name: &str) -> OpeningSpellKind {
@@ -269,6 +270,7 @@ fn opening_spell_kind(name: &str) -> OpeningSpellKind {
         "Rain of Filth" => OpeningSpellKind::RainOfFilth,
         "Mystical Tutor" => OpeningSpellKind::MysticalTutor,
         "Eldritch Evolution" => OpeningSpellKind::EldritchEvolution,
+        "An Offer You Can't Refuse" => OpeningSpellKind::AnOfferYouCantRefuse,
         _ => OpeningSpellKind::None,
     }
 }
@@ -282,6 +284,8 @@ pub enum OpeningCreatureKind {
     DeathriteShaman = 2,
     Ragavan = 3,
     TinderWall = 4,
+    RangerCaptainOfEos = 5,
+    EsperSentinel = 6,
 }
 
 fn opening_creature_kind(name: &str) -> OpeningCreatureKind {
@@ -290,6 +294,8 @@ fn opening_creature_kind(name: &str) -> OpeningCreatureKind {
         "Deathrite Shaman" => OpeningCreatureKind::DeathriteShaman,
         "Ragavan, Nimble Pilferer" => OpeningCreatureKind::Ragavan,
         "Tinder Wall" => OpeningCreatureKind::TinderWall,
+        "Ranger-Captain of Eos" => OpeningCreatureKind::RangerCaptainOfEos,
+        "Esper Sentinel" => OpeningCreatureKind::EsperSentinel,
         _ => OpeningCreatureKind::None,
     }
 }

@@ -466,7 +466,9 @@ impl EngineOpeningModel {
                 | OpeningSpellKind::RainOfFilth
                 | OpeningSpellKind::ElvishSpiritGuide
                 | OpeningSpellKind::SimianSpiritGuide => 300,
-                OpeningSpellKind::Gamble | OpeningSpellKind::NoxiousRevival => 250,
+                OpeningSpellKind::Gamble
+                | OpeningSpellKind::NoxiousRevival
+                | OpeningSpellKind::AnOfferYouCantRefuse => 250,
                 OpeningSpellKind::None => 0,
             },
             Some(OpeningCard::Creature(kind)) => match kind {
@@ -474,6 +476,8 @@ impl EngineOpeningModel {
                 | OpeningCreatureKind::DeathriteShaman
                 | OpeningCreatureKind::TinderWall => 300,
                 OpeningCreatureKind::Ragavan => 220,
+                OpeningCreatureKind::RangerCaptainOfEos => 100,
+                OpeningCreatureKind::EsperSentinel => 80,
                 OpeningCreatureKind::None => 0,
             },
             Some(OpeningCard::Land(land)) => 180 + i64::from(land.profile.colorless) * 50,
@@ -531,6 +535,7 @@ impl EngineOpeningModel {
                     | OpeningSpellKind::InfernalPlunge
                     | OpeningSpellKind::RainOfFilth
                     | OpeningSpellKind::EldritchEvolution => 2,
+                    OpeningSpellKind::AnOfferYouCantRefuse => 2,
                     OpeningSpellKind::None => 0,
                 },
                 Some(OpeningCard::Creature(kind)) => match kind {
@@ -538,6 +543,8 @@ impl EngineOpeningModel {
                     | OpeningCreatureKind::DeathriteShaman
                     | OpeningCreatureKind::TinderWall => 2,
                     OpeningCreatureKind::Ragavan => 1,
+                    OpeningCreatureKind::RangerCaptainOfEos
+                    | OpeningCreatureKind::EsperSentinel => 1,
                     OpeningCreatureKind::None => 0,
                 },
                 _ => 0,
@@ -1372,6 +1379,97 @@ impl EngineOpeningModel {
         }
     }
 
+    fn offer_bait_cost(&self, state: PackedStateV2, slot: SlotId) -> Option<Cost> {
+        match self.card(slot) {
+            Some(OpeningCard::Artifact(
+                OpeningArtifactKind::LotusPetal
+                | OpeningArtifactKind::LionsEyeDiamond
+                | OpeningArtifactKind::ChromeMox
+                | OpeningArtifactKind::MoxDiamond
+                | OpeningArtifactKind::MoxOpal
+                | OpeningArtifactKind::MoxAmber
+                | OpeningArtifactKind::ParadiseMantle,
+            )) => Some([0, 0, 0, 0, 0, 0]),
+            Some(OpeningCard::Artifact(
+                OpeningArtifactKind::SolRing | OpeningArtifactKind::ManaVault,
+            )) => Some([1, 0, 0, 0, 0, 0]),
+            Some(OpeningCard::Spell(OpeningSpellKind::SummonersPact)) => Some([0, 0, 0, 0, 0, 0]),
+            Some(OpeningCard::Spell(OpeningSpellKind::NoxiousRevival))
+                if !state.graveyard.is_empty() =>
+            {
+                Some([0, 0, 0, 0, 0, 0])
+            }
+            Some(OpeningCard::Spell(OpeningSpellKind::DarkRitual))
+            | Some(OpeningCard::Spell(OpeningSpellKind::ImperialSeal))
+            | Some(OpeningCard::Spell(OpeningSpellKind::VampiricTutor))
+            | Some(OpeningCard::Spell(OpeningSpellKind::SchemingSymmetry)) => {
+                Some([0, 1, 0, 0, 0, 0])
+            }
+            Some(OpeningCard::Spell(OpeningSpellKind::RiteOfFlame)) => Some([0, 0, 1, 0, 0, 0]),
+            Some(OpeningCard::Spell(OpeningSpellKind::EnlightenedTutor)) => {
+                Some([0, 0, 0, 0, 1, 0])
+            }
+            Some(OpeningCard::Spell(OpeningSpellKind::MysticalTutor)) => Some([0, 0, 0, 1, 0, 0]),
+            Some(OpeningCard::Spell(OpeningSpellKind::GreenSunsZenith)) => Some([0, 0, 0, 0, 0, 1]),
+            _ => None,
+        }
+    }
+
+    fn offer_bait_is_instant(&self, slot: SlotId) -> bool {
+        matches!(
+            self.spell_kind(slot),
+            Some(
+                OpeningSpellKind::SummonersPact
+                    | OpeningSpellKind::NoxiousRevival
+                    | OpeningSpellKind::DarkRitual
+                    | OpeningSpellKind::VampiricTutor
+                    | OpeningSpellKind::EnlightenedTutor
+                    | OpeningSpellKind::MysticalTutor
+            )
+        )
+    }
+
+    fn generate_offer(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        for offer in state.hand.iter().filter(|slot| {
+            matches!(
+                self.spell_kind(*slot),
+                Some(OpeningSpellKind::AnOfferYouCantRefuse)
+            )
+        }) {
+            for bait in state.hand.iter().filter(|slot| *slot != offer) {
+                if state.flags & PRETURN_WINDOW != 0 && !self.offer_bait_is_instant(bait) {
+                    continue;
+                }
+                let Some(bait_cost) = self.offer_bait_cost(state, bait) else {
+                    continue;
+                };
+                for bait_plan in self.payment_plans(state, bait_cost) {
+                    let Some(mut bait_cast) = self.apply_payment_plan(state, bait_plan) else {
+                        continue;
+                    };
+                    if !bait_cast.move_card(bait, Zone::Hand, Zone::Graveyard) {
+                        continue;
+                    }
+                    for offer_plan in self.payment_plans(bait_cast, [0, 0, 0, 1, 0, 0]) {
+                        let Some(mut next) = self.apply_payment_plan(bait_cast, offer_plan) else {
+                            continue;
+                        };
+                        if next.move_card(offer, Zone::Hand, Zone::Graveyard)
+                            && next.add_token(TokenKind::Treasure)
+                            && next.add_token(TokenKind::Treasure)
+                        {
+                            out.push(InformationTransition::Deterministic(next));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn generate_tutors(
         &self,
         state: PackedStateV2,
@@ -1923,6 +2021,10 @@ impl EngineOpeningModel {
                 Some(OpeningCreatureKind::Ragavan) => {
                     smallvec::smallvec![[0, 0, 1, 0, 0, 0]]
                 }
+                Some(OpeningCreatureKind::EsperSentinel) => {
+                    smallvec::smallvec![[0, 0, 0, 0, 1, 0]]
+                }
+                Some(OpeningCreatureKind::RangerCaptainOfEos) => continue,
                 _ => continue,
             };
             for cost in costs {
@@ -1936,6 +2038,49 @@ impl EngineOpeningModel {
                         PermanentInstance::new(PermanentSource::card(slot)).with_fresh(true),
                     ) {
                         out.push(InformationTransition::Deterministic(next));
+                    }
+                }
+            }
+        }
+    }
+
+    fn generate_ranger_captain(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        if state.flags & PRETURN_WINDOW != 0 {
+            return;
+        }
+        for ranger in state.hand.iter().filter(|slot| {
+            matches!(
+                self.creature_kind(*slot),
+                Some(OpeningCreatureKind::RangerCaptainOfEos)
+            )
+        }) {
+            for plan in self.payment_plans(state, [1, 0, 0, 0, 2, 0]) {
+                let Some(mut cast) = self.apply_payment_plan(state, plan) else {
+                    continue;
+                };
+                if !cast.move_card_to_battlefield(
+                    ranger,
+                    Zone::Hand,
+                    PermanentInstance::new(PermanentSource::card(ranger)).with_fresh(true),
+                ) {
+                    continue;
+                }
+                out.push(InformationTransition::Deterministic(cast));
+                for esper in state.library.cards().iter().filter(|slot| {
+                    matches!(
+                        self.creature_kind(*slot),
+                        Some(OpeningCreatureKind::EsperSentinel)
+                    )
+                }) {
+                    let mut searched = cast;
+                    if searched.library.remove_known_or_unknown(esper) {
+                        searched.library.shuffle_all_unknown();
+                        searched.hand.insert(esper);
+                        out.push(InformationTransition::Deterministic(searched));
                     }
                 }
             }
@@ -2217,6 +2362,7 @@ impl InformationModel for EngineOpeningModel {
     ) {
         if state.flags & PRETURN_WINDOW != 0 {
             self.generate_rituals(state, out);
+            self.generate_offer(state, out);
             self.generate_tutors(state, out);
             self.generate_green_engine_tutors(state, out);
             self.generate_sacrifice_spells(state, out);
@@ -2241,10 +2387,12 @@ impl InformationModel for EngineOpeningModel {
         self.generate_fetches(state, out);
         self.generate_artifact_casts(state, out);
         self.generate_rituals(state, out);
+        self.generate_offer(state, out);
         self.generate_tutors(state, out);
         self.generate_green_engine_tutors(state, out);
         self.generate_sacrifice_spells(state, out);
         self.generate_crop_rotation(state, out);
+        self.generate_ranger_captain(state, out);
         self.generate_creature_casts(state, out);
         self.generate_eldritch_evolution(state, out);
         self.generate_deathrite_mana(state, out);
@@ -2898,6 +3046,67 @@ mod tests {
             .expect("transferred Wishclaw remains represented");
         assert_eq!(claw.counters(), 0);
         assert!(!model.has_artifact(tutored));
+    }
+
+    #[test]
+    fn offer_can_counter_own_zero_mana_bait_for_two_treasures() {
+        let model = model(&["An Offer You Can't Refuse", "Lotus Petal", "Command Tower"]);
+        let mut state = PackedStateV2 {
+            hand: [0, 1].into_iter().collect(),
+            ..PackedStateV2::default()
+        };
+        state
+            .battlefield
+            .insert(PermanentInstance::new(PermanentSource::card(2)));
+        let mut out = SmallVec::new();
+
+        model.generate_offer(state, &mut out);
+
+        let next = out
+            .iter()
+            .filter_map(|transition| match transition {
+                InformationTransition::Deterministic(next) => Some(next),
+                InformationTransition::Chance(_) => None,
+            })
+            .find(|next| next.graveyard.contains(0) && next.graveyard.contains(1))
+            .expect("Offer line");
+        assert_eq!(
+            next.battlefield
+                .as_slice()
+                .iter()
+                .filter(|permanent| {
+                    permanent.source().token_kind() == Some(TokenKind::Treasure)
+                })
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn ranger_captain_has_fail_to_find_and_esper_search_branches() {
+        let model = model(&["Ranger-Captain of Eos", "Esper Sentinel", "Blank"]);
+        let state = PackedStateV2 {
+            hand: [0].into_iter().collect(),
+            library: PackedLibrary::new([1, 2].into_iter().collect()),
+            mana: ManaPool([0, 0, 0, 2, 0, 1]),
+            ..PackedStateV2::default()
+        };
+        let mut out = SmallVec::new();
+
+        model.generate_ranger_captain(state, &mut out);
+
+        assert!(out.iter().any(|transition| matches!(
+            transition,
+            InformationTransition::Deterministic(next)
+                if next.hand.contains(1)
+                    && next.battlefield.contains_source(PermanentSource::card(0))
+                    && !next.library.cards().contains(1)
+        )));
+        assert!(out.iter().any(|transition| matches!(
+            transition,
+            InformationTransition::Deterministic(next)
+                if !next.hand.contains(1) && next.library.cards().contains(1)
+        )));
     }
 
     #[test]
