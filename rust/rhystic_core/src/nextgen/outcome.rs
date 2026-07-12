@@ -143,6 +143,128 @@ pub struct OpeningOutcomeSolver<'a, M: OpeningOutcomeModel> {
     metrics: SearchMetrics,
 }
 
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+pub struct OpeningExistenceResult {
+    pub found: bool,
+    pub metrics: SearchMetrics,
+}
+
+pub struct OpeningExistenceDiscrepancySolver<'a, M: OpeningOutcomeModel> {
+    model: &'a M,
+    action_candidate_limit: usize,
+    table: FxHashMap<(M::State, u8, u8), bool>,
+    visiting: FxHashSet<(M::State, u8, u8)>,
+    metrics: SearchMetrics,
+}
+
+impl<'a, M: OpeningOutcomeModel> OpeningExistenceDiscrepancySolver<'a, M>
+where
+    M::State: Copy + Eq + Hash,
+{
+    pub fn new(model: &'a M, action_candidate_limit: usize) -> Self {
+        Self {
+            model,
+            action_candidate_limit: action_candidate_limit.max(1),
+            table: FxHashMap::default(),
+            visiting: FxHashSet::default(),
+            metrics: SearchMetrics::default(),
+        }
+    }
+
+    pub fn solve(
+        &mut self,
+        state: M::State,
+        depth: u8,
+        discrepancy_budget: u8,
+    ) -> OpeningExistenceResult {
+        let found = self.value(state, depth, discrepancy_budget);
+        OpeningExistenceResult {
+            found,
+            metrics: self.metrics,
+        }
+    }
+
+    fn value(&mut self, state: M::State, depth: u8, discrepancies: u8) -> bool {
+        if self.model.terminal_opening_outcome(state).is_some() {
+            self.metrics.terminal_successes += 1;
+            return true;
+        }
+        if depth == 0 {
+            self.metrics.depth_cutoffs += 1;
+            return false;
+        }
+        let key = (state, depth, discrepancies);
+        if let Some(found) = self.table.get(&key) {
+            self.metrics.transposition_hits += 1;
+            return *found;
+        }
+        if !self.visiting.insert(key) {
+            self.metrics.cycle_cutoffs += 1;
+            return false;
+        }
+
+        self.metrics.states_expanded += 1;
+        let mut transitions = SmallVec::new();
+        self.model.transitions(state, &mut transitions);
+        let generated = transitions.len();
+        let mut deterministic = FxHashSet::default();
+        transitions.retain(|transition| match transition {
+            InformationTransition::Deterministic(next) => deterministic.insert(*next),
+            InformationTransition::Chance(_) => true,
+        });
+        transitions.sort_unstable_by_key(|transition| {
+            std::cmp::Reverse(self.model.transition_priority(state, transition))
+        });
+        self.metrics.states_deduplicated += (generated - transitions.len()) as u64;
+        self.metrics.strategic_actions_generated += transitions.len() as u64;
+
+        let searched = if discrepancies == 0 {
+            1
+        } else {
+            self.action_candidate_limit
+        };
+        let mut selected = SmallVec::<[InformationTransition<M::State>; 8]>::new();
+        let mut seen_families = FxHashSet::default();
+        for transition in transitions {
+            let family = self.model.transition_family(state, &transition);
+            if family.is_some_and(|family| !seen_families.insert(family)) {
+                continue;
+            }
+            selected.push(transition);
+            if selected.len() == searched {
+                break;
+            }
+        }
+        let mut found = false;
+        for (rank, transition) in selected.into_iter().enumerate() {
+            let next_discrepancies = if rank == 0 {
+                discrepancies
+            } else if discrepancies == 0 {
+                continue;
+            } else {
+                discrepancies - 1
+            };
+            found = match transition {
+                InformationTransition::Deterministic(next) => {
+                    self.value(next, depth - 1, next_discrepancies)
+                }
+                InformationTransition::Chance(outcomes) => {
+                    self.metrics.chance_nodes += 1;
+                    outcomes.into_iter().any(|(next, probability)| {
+                        probability > 0.0 && self.value(next, depth - 1, next_discrepancies)
+                    })
+                }
+            };
+            if found {
+                break;
+            }
+        }
+        self.visiting.remove(&key);
+        self.table.insert(key, found);
+        found
+    }
+}
+
 pub struct OpeningOutcomeDiscrepancySolver<'a, M: OpeningOutcomeModel> {
     model: &'a M,
     action_candidate_limit: usize,

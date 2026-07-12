@@ -3,8 +3,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use super::{
-    CardMask, DeckSpec, EngineOpeningModel, OpeningOutcome, OpeningOutcomeDiscrepancySolver,
-    OpeningOutcomeResult, PackedLibrary, PackedStateV2, SearchMetrics,
+    CardMask, DeckSpec, EngineOpeningModel, OpeningExistenceDiscrepancySolver, OpeningOutcome,
+    OpeningOutcomeDiscrepancySolver, OpeningOutcomeResult, PackedLibrary, PackedStateV2,
+    SearchMetrics,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -13,6 +14,8 @@ pub struct OpeningReplayGame {
     pub hand: Vec<String>,
     #[serde(default)]
     pub bottomed: Vec<String>,
+    #[serde(default)]
+    pub library_top: Vec<String>,
     pub gemstone_caverns_live: bool,
     #[serde(default)]
     pub legacy_hit: bool,
@@ -38,11 +41,14 @@ pub struct OpeningReplayRequest {
     pub action_candidate_limit: usize,
     #[serde(default = "default_workers")]
     pub workers: usize,
+    #[serde(default)]
+    pub existence_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpeningReplayTierOutcome {
     pub discrepancy_budget: u8,
+    pub found: bool,
     pub outcome: OpeningOutcome,
     pub lower_bound: f64,
     pub upper_bound: f64,
@@ -98,6 +104,7 @@ pub fn evaluate_opening_replay(
                     request.depth,
                     &request.discrepancy_budgets,
                     request.action_candidate_limit,
+                    request.existence_only,
                 ) {
                     Ok(outcome) => outcomes.lock().expect("replay outcomes lock").push(outcome),
                     Err(message) => {
@@ -123,6 +130,7 @@ fn evaluate_game(
     depth: u8,
     discrepancy_budgets: &[u8],
     action_candidate_limit: usize,
+    existence_only: bool,
 ) -> Result<OpeningReplayGameOutcome, String> {
     let mut hand = CardMask::EMPTY;
     for name in &game.hand {
@@ -157,6 +165,24 @@ fn evaluate_game(
         library.insert_unknown(slot);
         library.push_known_bottom(slot);
     }
+    let mut known_top = CardMask::EMPTY;
+    for name in &game.library_top {
+        let slot = deck.slot(name).ok_or_else(|| {
+            format!(
+                "game {} known top contains unknown card {name}",
+                game.game_index
+            )
+        })?;
+        if hand.contains(slot) || bottomed.contains(slot) || !known_top.insert(slot) {
+            return Err(format!(
+                "game {} has duplicate hand/bottom/top card {name}",
+                game.game_index
+            ));
+        }
+    }
+    for name in game.library_top.iter().rev() {
+        library.push_known_top(deck.slot(name).expect("validated known-top slot"));
+    }
     let state = PackedStateV2 {
         hand,
         library,
@@ -165,6 +191,29 @@ fn evaluate_game(
     let pregame_states = model.pregame_states(state, game.gemstone_caverns_live);
     let mut tiers = Vec::with_capacity(discrepancy_budgets.len());
     for &budget in discrepancy_budgets {
+        if existence_only {
+            let mut solver = OpeningExistenceDiscrepancySolver::new(model, action_candidate_limit);
+            let mut found = false;
+            let mut metrics = SearchMetrics::default();
+            for pregame in &pregame_states {
+                let result = solver.solve(*pregame, depth, budget);
+                metrics = result.metrics;
+                if result.found {
+                    found = true;
+                    break;
+                }
+            }
+            tiers.push(OpeningReplayTierOutcome {
+                discrepancy_budget: budget,
+                found,
+                outcome: OpeningOutcome::default(),
+                lower_bound: f64::from(found),
+                upper_bound: f64::from(found),
+                capped: false,
+                search_metrics: metrics,
+            });
+            continue;
+        }
         let mut solver = OpeningOutcomeDiscrepancySolver::new(model, action_candidate_limit);
         let mut best = OpeningOutcomeResult::default();
         for pregame in &pregame_states {
@@ -179,6 +228,7 @@ fn evaluate_game(
         }
         tiers.push(OpeningReplayTierOutcome {
             discrepancy_budget: budget,
+            found: best.outcome.weighted_ev > 0.0,
             outcome: best.outcome,
             lower_bound: best.lower_bound,
             upper_bound: best.upper_bound,
@@ -242,6 +292,7 @@ mod tests {
                 bottomed: ["Blank A", "Blank B", "Blank C", "Blank D"]
                     .map(str::to_string)
                     .to_vec(),
+                library_top: Vec::new(),
                 gemstone_caverns_live: false,
                 legacy_hit: true,
                 legacy_capped: false,
@@ -253,6 +304,7 @@ mod tests {
             discrepancy_budgets: vec![0, 1],
             action_candidate_limit: 2,
             workers: 1,
+            existence_only: false,
         };
 
         let response = evaluate_opening_replay(&request).expect("replay");
@@ -288,6 +340,7 @@ mod tests {
                 .map(str::to_string)
                 .to_vec(),
                 bottomed: Vec::new(),
+                library_top: Vec::new(),
                 gemstone_caverns_live: false,
                 legacy_hit: true,
                 legacy_capped: false,
@@ -308,6 +361,7 @@ mod tests {
                 bottomed: ["Mental Misstep", "Noxious Revival"]
                     .map(str::to_string)
                     .to_vec(),
+                library_top: Vec::new(),
                 gemstone_caverns_live: false,
                 legacy_hit: true,
                 legacy_capped: false,
@@ -326,6 +380,7 @@ mod tests {
                 .map(str::to_string)
                 .to_vec(),
                 bottomed: ["Force of Will", "Swan Song"].map(str::to_string).to_vec(),
+                library_top: Vec::new(),
                 gemstone_caverns_live: false,
                 legacy_hit: true,
                 legacy_capped: false,
@@ -341,6 +396,7 @@ mod tests {
             discrepancy_budgets: vec![2, 3, 4],
             action_candidate_limit: 2,
             workers: 1,
+            existence_only: false,
         })
         .expect("deep recall replay");
 

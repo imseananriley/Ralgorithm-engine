@@ -55,8 +55,9 @@ pub use opening_replay::{
     OpeningReplayResponse, OpeningReplayTierOutcome,
 };
 pub use outcome::{
-    evaluate_opening_outcome_policy, OpeningOutcome, OpeningOutcomeDiscrepancySolver,
-    OpeningOutcomeModel, OpeningOutcomePolicySolver, OpeningOutcomeResult, OpeningOutcomeSolver,
+    evaluate_opening_outcome_policy, OpeningExistenceDiscrepancySolver, OpeningExistenceResult,
+    OpeningOutcome, OpeningOutcomeDiscrepancySolver, OpeningOutcomeModel,
+    OpeningOutcomePolicySolver, OpeningOutcomeResult, OpeningOutcomeSolver,
 };
 pub use policy::{evaluate_compiled_policy, CompiledPolicy, PolicyResult};
 pub use reference_solver::{
