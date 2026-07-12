@@ -93,6 +93,7 @@ pub struct OpeningOutcomeAccumulator {
     pub heartwood_turn_2_sum: f64,
     pub weighted_upper_sum: f64,
     pub capped_samples: u64,
+    pub search_metrics: SearchMetrics,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -108,6 +109,7 @@ pub struct OpeningOutcomeSummary {
     pub any_engine_by_turn_2: f64,
     pub weighted_ev_upper: f64,
     pub capped_rate: f64,
+    pub search_metrics: SearchMetrics,
 }
 
 impl OpeningOutcomeAccumulator {
@@ -121,6 +123,7 @@ impl OpeningOutcomeAccumulator {
         self.heartwood_turn_2_sum += outcome.heartwood_turn_2;
         self.weighted_upper_sum += result.upper_bound;
         self.capped_samples += u64::from(result.capped);
+        self.search_metrics.merge(result.metrics);
     }
 
     fn merge(&mut self, other: Self) {
@@ -132,6 +135,7 @@ impl OpeningOutcomeAccumulator {
         self.heartwood_turn_2_sum += other.heartwood_turn_2_sum;
         self.weighted_upper_sum += other.weighted_upper_sum;
         self.capped_samples += other.capped_samples;
+        self.search_metrics.merge(other.search_metrics);
     }
 
     fn summarize(self, name: String) -> OpeningOutcomeSummary {
@@ -155,6 +159,7 @@ impl OpeningOutcomeAccumulator {
                 + heartwood_turn_2,
             weighted_ev_upper: self.weighted_upper_sum / n,
             capped_rate: self.capped_samples as f64 / n,
+            search_metrics: self.search_metrics,
         }
     }
 }
@@ -718,19 +723,19 @@ fn best_keep_outcome_with(
             .into_iter()
             .map(&mut solve)
         {
+            candidate.metrics = result.metrics;
             candidate.upper_bound = candidate.upper_bound.max(result.upper_bound);
             if result.outcome.weighted_ev > candidate.outcome.weighted_ev {
                 candidate.outcome = result.outcome;
                 candidate.lower_bound = result.lower_bound;
-                candidate.metrics = result.metrics;
             }
         }
         candidate.capped = candidate.upper_bound > candidate.lower_bound + f64::EPSILON;
         best.upper_bound = best.upper_bound.max(candidate.upper_bound);
+        best.metrics = candidate.metrics;
         if candidate.outcome.weighted_ev > best.outcome.weighted_ev {
             best.outcome = candidate.outcome;
             best.lower_bound = candidate.lower_bound;
-            best.metrics = candidate.metrics;
         }
         best.capped = best.upper_bound > best.lower_bound + f64::EPSILON;
     }
