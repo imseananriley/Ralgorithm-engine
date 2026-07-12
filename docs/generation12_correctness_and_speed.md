@@ -30,11 +30,14 @@ Production mode requires a 99-card singleton library and validates card color ma
 - Duplicate deterministic actions are removed before recursion.
 - Workers claim small dynamic chunks, eliminating contiguous-shard tail imbalance while deterministic report ordering preserves reproducibility.
 - Bulk bottom screening reduces low-fidelity cost while strict samples remain exhaustive.
+- A bounded thread-local payment cache reuses `(model, packed state, cost)` closures without cross-variant sharing or mutex contention.
 
 On the same champion sample at depth 12, exhaustive low-fidelity bottoms took 8.78 seconds. Four visible-ranked candidates took 4.42 seconds, and one took 1.66 seconds; the one- and four-candidate outcomes matched on that sample. This is a latency calibration, not an accuracy claim.
+
+Adding payment-plan reuse reduced the one-candidate calibration from 1.656 to 1.560 seconds (5.8%) with identical weighted output. The recorded search generated 35,243 strategic actions and removed only six duplicate deterministic actions, confirming that payment reuse and bottom screening matter more than action deduplication on this hand.
 
 An eight-game, four-worker smoke with one bottom candidate and four pilot hands completed in 5.01 measured seconds (1.60 games/s). Its model digest was `0a514687c538b28e88150d4d96c9bcc7`. The run is not inferential: only eight games were sampled and 62.5% had a nonzero depth interval at depth 12.
 
 ## Next Publication Gate
 
-Implement and differentially test Offer and Ranger-Captain, calibrate bottom-candidate bias with an independently selected exhaustive sample, increase depth until the weighted bound width is negligible, and run enough paired samples to meet a preregistered confidence-interval half-width. Payment-plan caching should be added only after a profile demonstrates repeated identical `(state resources, cost)` queries; a shared mutex cache would likely lose on this workload.
+Implement and differentially test Offer and Ranger-Captain, calibrate bottom-candidate bias with an independently selected exhaustive sample, increase depth until the weighted bound width is negligible, and run enough paired samples to meet a preregistered confidence-interval half-width.

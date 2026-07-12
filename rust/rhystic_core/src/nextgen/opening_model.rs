@@ -1,11 +1,15 @@
 use smallvec::SmallVec;
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use rustc_hash::FxHashMap;
 
 use super::{
     compute_payment_plans, CardFlags, CardMask, CommanderZone, CompiledPolicy, DeckSpec,
     InformationModel, InformationTransition, ManaOption, ManaPool, ManaSource, OpeningArtifactKind,
     OpeningCreatureKind, OpeningLandKind, OpeningManaProfile, OpeningOutcome, OpeningOutcomeModel,
-    OpeningSpellKind, PackedStateV2, PermanentInstance, PermanentSource, ResourceUse, SlotId,
-    TokenKind, Zone,
+    OpeningSpellKind, PackedStateV2, PaymentPlan, PermanentInstance, PermanentSource, ResourceUse,
+    SlotId, TokenKind, Zone,
 };
 use crate::{pay_options, Cost};
 
@@ -14,6 +18,20 @@ const TURN_DRAW_DONE: u32 = 1 << 1;
 const PRETURN_WINDOW: u32 = 1 << 2;
 const PACT_DUE: u32 = 1 << 3;
 const RAIN_ACTIVE: u32 = 1 << 4;
+const PAYMENT_CACHE_CAPACITY: usize = 65_536;
+static NEXT_MODEL_CACHE_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+struct PaymentCacheKey {
+    model_id: u64,
+    state: PackedStateV2,
+    cost: Cost,
+}
+
+thread_local! {
+    static PAYMENT_CACHE: RefCell<FxHashMap<PaymentCacheKey, Vec<PaymentPlan>>> =
+        RefCell::new(FxHashMap::default());
+}
 
 #[derive(Debug, Clone)]
 struct LandSemantics {
@@ -43,6 +61,7 @@ enum OpeningEngineKind {
 
 #[derive(Debug, Clone)]
 pub struct EngineOpeningModel {
+    cache_id: u64,
     cards: Box<[OpeningCard]>,
     engine_slots: CardMask,
     supported_slots: CardMask,
@@ -135,6 +154,7 @@ impl EngineOpeningModel {
             cards.push(compiled);
         }
         Self {
+            cache_id: NEXT_MODEL_CACHE_ID.fetch_add(1, Ordering::Relaxed),
             cards: cards.into_boxed_slice(),
             engine_slots,
             supported_slots,
@@ -822,11 +842,7 @@ impl EngineOpeningModel {
                     }
                 }
                 OpeningArtifactKind::WishclawTalisman => {
-                    for plan in compute_payment_plans(
-                        state.mana,
-                        &self.payment_sources(state),
-                        [1, 1, 0, 0, 0, 0],
-                    ) {
+                    for plan in self.payment_plans(state, [1, 1, 0, 0, 0, 0]) {
                         let Some(mut next) = self.apply_payment_plan(state, plan) else {
                             continue;
                         };
@@ -840,10 +856,8 @@ impl EngineOpeningModel {
                     }
                 }
                 OpeningArtifactKind::SolRing | OpeningArtifactKind::ManaVault => {
-                    let sources = self.payment_sources(state);
                     if self.direct_payments {
-                        for plan in compute_payment_plans(state.mana, &sources, [1, 0, 0, 0, 0, 0])
-                        {
+                        for plan in self.payment_plans(state, [1, 0, 0, 0, 0, 0]) {
                             let Some(mut next) = self.apply_payment_plan(state, plan) else {
                                 continue;
                             };
@@ -984,11 +998,7 @@ impl EngineOpeningModel {
                     continue;
                 }
                 if self.direct_payments {
-                    for plan in compute_payment_plans(
-                        state.mana,
-                        &self.payment_sources(state),
-                        [1, 0, 0, 0, 0, 0],
-                    ) {
+                    for plan in self.payment_plans(state, [1, 0, 0, 0, 0, 0]) {
                         let Some(mut next) = self.apply_payment_plan(state, plan) else {
                             continue;
                         };
@@ -1069,7 +1079,7 @@ impl EngineOpeningModel {
         }
         let cost = [state.commander.tax, 0, 0, 0, 1, 0];
         if self.direct_payments {
-            for plan in compute_payment_plans(state.mana, &self.payment_sources(state), cost) {
+            for plan in self.payment_plans(state, cost) {
                 let Some(mut next) = self.apply_payment_plan(state, plan) else {
                     continue;
                 };
@@ -1251,11 +1261,27 @@ impl EngineOpeningModel {
         sources
     }
 
-    fn apply_payment_plan(
-        &self,
-        state: PackedStateV2,
-        plan: super::PaymentPlan,
-    ) -> Option<PackedStateV2> {
+    fn payment_plans(&self, state: PackedStateV2, cost: Cost) -> Vec<PaymentPlan> {
+        let key = PaymentCacheKey {
+            model_id: self.cache_id,
+            state,
+            cost,
+        };
+        PAYMENT_CACHE.with(|cache| {
+            if let Some(plans) = cache.borrow().get(&key) {
+                return plans.clone();
+            }
+            let plans = compute_payment_plans(state.mana, &self.payment_sources(state), cost);
+            let mut cache = cache.borrow_mut();
+            if cache.len() >= PAYMENT_CACHE_CAPACITY {
+                cache.clear();
+            }
+            cache.insert(key, plans.clone());
+            plans
+        })
+    }
+
+    fn apply_payment_plan(&self, state: PackedStateV2, plan: PaymentPlan) -> Option<PackedStateV2> {
         let mut next = state;
         for slot in plan.consumption.tapped.iter() {
             let permanent = *next
@@ -1295,12 +1321,11 @@ impl EngineOpeningModel {
         state: PackedStateV2,
         out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
     ) {
-        let sources = self.payment_sources(state);
         for slot in state.hand.iter() {
             let Some(OpeningCard::Engine { cost, .. }) = self.card(slot) else {
                 continue;
             };
-            for plan in compute_payment_plans(state.mana, &sources, *cost) {
+            for plan in self.payment_plans(state, *cost) {
                 let Some(mut next) = self.apply_payment_plan(state, plan) else {
                     continue;
                 };
@@ -1335,7 +1360,7 @@ impl EngineOpeningModel {
             {
                 continue;
             }
-            for plan in compute_payment_plans(state.mana, &self.payment_sources(state), cost) {
+            for plan in self.payment_plans(state, cost) {
                 let Some(mut next) = self.apply_payment_plan(state, plan) else {
                     continue;
                 };
@@ -1375,7 +1400,7 @@ impl EngineOpeningModel {
                 OpeningSpellKind::MysticalTutor => ([0, 0, 0, 1, 0, 0], false),
                 _ => continue,
             };
-            let plans = compute_payment_plans(state.mana, &self.payment_sources(state), cost);
+            let plans = self.payment_plans(state, cost);
             for target in state.library.cards().iter() {
                 if matches!(kind, OpeningSpellKind::EnlightenedTutor)
                     && !self.card_flags[target as usize].contains(CardFlags::ARTIFACT)
@@ -1450,8 +1475,7 @@ impl EngineOpeningModel {
             {
                 continue;
             }
-            let plans =
-                compute_payment_plans(state.mana, &self.payment_sources(state), [1, 0, 0, 0, 0, 0]);
+            let plans = self.payment_plans(state, [1, 0, 0, 0, 0, 0]);
             for target in state.library.cards().iter() {
                 for plan in &plans {
                     let Some(mut next) = self.apply_payment_plan(state, *plan) else {
@@ -1489,13 +1513,8 @@ impl EngineOpeningModel {
             .iter()
             .filter(|slot| matches!(self.spell_kind(*slot), Some(OpeningSpellKind::Manamorphose)))
         {
-            let sources = self.payment_sources(state);
-            let mut plans = compute_payment_plans(state.mana, &sources, [1, 0, 1, 0, 0, 0]);
-            plans.extend(compute_payment_plans(
-                state.mana,
-                &sources,
-                [1, 0, 0, 0, 0, 1],
-            ));
+            let mut plans = self.payment_plans(state, [1, 0, 1, 0, 0, 0]);
+            plans.extend(self.payment_plans(state, [1, 0, 0, 0, 0, 1]));
             plans.sort_by_key(|plan| {
                 (
                     plan.consumption.tapped.bits(),
@@ -1551,8 +1570,7 @@ impl EngineOpeningModel {
             .iter()
             .filter(|slot| matches!(self.spell_kind(*slot), Some(OpeningSpellKind::Gamble)))
         {
-            let plans =
-                compute_payment_plans(state.mana, &self.payment_sources(state), [0, 0, 1, 0, 0, 0]);
+            let plans = self.payment_plans(state, [0, 0, 1, 0, 0, 0]);
             for target in state.library.cards().iter() {
                 for plan in &plans {
                     let Some(mut searched) = self.apply_payment_plan(state, *plan) else {
@@ -1631,8 +1649,7 @@ impl EngineOpeningModel {
             .iter()
             .filter(|slot| matches!(self.spell_kind(*slot), Some(OpeningSpellKind::DemonicTutor)))
         {
-            let plans =
-                compute_payment_plans(state.mana, &self.payment_sources(state), [1, 1, 0, 0, 0, 0]);
+            let plans = self.payment_plans(state, [1, 1, 0, 0, 0, 0]);
             for led in &leds {
                 for target in state.library.cards().iter() {
                     for plan in &plans {
@@ -1674,11 +1691,7 @@ impl EngineOpeningModel {
         for tutor in state.hand.iter() {
             match self.spell_kind(tutor) {
                 Some(OpeningSpellKind::GreenSunsZenith) if state.flags & PRETURN_WINDOW == 0 => {
-                    let plans = compute_payment_plans(
-                        state.mana,
-                        &self.payment_sources(state),
-                        [3, 0, 0, 0, 0, 1],
-                    );
+                    let plans = self.payment_plans(state, [3, 0, 0, 0, 0, 1]);
                     for target in state.library.cards().iter().filter(|target| {
                         matches!(self.card(*target), Some(OpeningCard::Engine { .. }))
                             && self.card_colors[*target as usize] & (1 << 4) != 0
@@ -1741,23 +1754,12 @@ impl EngineOpeningModel {
                 permanent.with_tapped(stays_tapped).with_fresh(false),
             );
         }
-        if !compute_payment_plans(
-            upkeep.mana,
-            &self.payment_sources(upkeep),
-            [2, 0, 0, 0, 0, 2],
-        )
-        .is_empty()
-        {
+        if !self.payment_plans(upkeep, [2, 0, 0, 0, 0, 2]).is_empty() {
             return true;
         }
         self.angels_grace_slot.is_some_and(|grace| {
             upkeep.hand.contains(grace)
-                && !compute_payment_plans(
-                    upkeep.mana,
-                    &self.payment_sources(upkeep),
-                    [0, 0, 0, 0, 1, 0],
-                )
-                .is_empty()
+                && !self.payment_plans(upkeep, [0, 0, 0, 0, 1, 0]).is_empty()
         })
     }
 
@@ -1798,11 +1800,7 @@ impl EngineOpeningModel {
         for spell in state.hand.iter() {
             let kind = self.spell_kind(spell);
             if matches!(kind, Some(OpeningSpellKind::RainOfFilth)) {
-                for plan in compute_payment_plans(
-                    state.mana,
-                    &self.payment_sources(state),
-                    [0, 1, 0, 0, 0, 0],
-                ) {
+                for plan in self.payment_plans(state, [0, 1, 0, 0, 0, 0]) {
                     let Some(mut next) = self.apply_payment_plan(state, plan) else {
                         continue;
                     };
@@ -1825,7 +1823,7 @@ impl EngineOpeningModel {
                 }
                 _ => continue,
             };
-            let plans = compute_payment_plans(state.mana, &self.payment_sources(state), cost);
+            let plans = self.payment_plans(state, cost);
             for creature in self.creature_sources(state) {
                 for plan in &plans {
                     let Some(mut paid) = self.apply_payment_plan(state, *plan) else {
@@ -1872,8 +1870,7 @@ impl EngineOpeningModel {
                 .filter_map(|permanent| permanent.source().card_slot())
                 .filter(|slot| self.land_kind(*slot).is_some())
                 .collect();
-            let plans =
-                compute_payment_plans(state.mana, &self.payment_sources(state), [0, 0, 0, 0, 0, 1]);
+            let plans = self.payment_plans(state, [0, 0, 0, 0, 0, 1]);
             for sacrificed in &lands {
                 for target in state.library.cards().iter() {
                     let Some(OpeningCard::Land(target_land)) = self.card(target) else {
@@ -1928,9 +1925,8 @@ impl EngineOpeningModel {
                 }
                 _ => continue,
             };
-            let sources = self.payment_sources(state);
             for cost in costs {
-                for plan in compute_payment_plans(state.mana, &sources, cost) {
+                for plan in self.payment_plans(state, cost) {
                     let Some(mut next) = self.apply_payment_plan(state, plan) else {
                         continue;
                     };
@@ -1960,8 +1956,7 @@ impl EngineOpeningModel {
                 Some(OpeningSpellKind::EldritchEvolution)
             )
         }) {
-            let plans =
-                compute_payment_plans(state.mana, &self.payment_sources(state), [1, 0, 0, 0, 0, 2]);
+            let plans = self.payment_plans(state, [1, 0, 0, 0, 0, 2]);
             for creature in self.creature_sources(state) {
                 for target in state.library.cards().iter().filter(|target| {
                     matches!(self.card(*target), Some(OpeningCard::Engine { .. }))
@@ -2120,9 +2115,7 @@ impl EngineOpeningModel {
         }
 
         if next.flags & PACT_DUE != 0 {
-            for plan in
-                compute_payment_plans(next.mana, &self.payment_sources(next), [2, 0, 0, 0, 0, 2])
-            {
+            for plan in self.payment_plans(next, [2, 0, 0, 0, 0, 2]) {
                 if let Some(mut paid) = self.apply_payment_plan(next, plan) {
                     paid.flags &= !PACT_DUE;
                     out.push(InformationTransition::Deterministic(paid));
@@ -2132,11 +2125,7 @@ impl EngineOpeningModel {
                 .angels_grace_slot
                 .filter(|grace| next.hand.contains(*grace))
             {
-                for plan in compute_payment_plans(
-                    next.mana,
-                    &self.payment_sources(next),
-                    [0, 0, 0, 0, 1, 0],
-                ) {
+                for plan in self.payment_plans(next, [0, 0, 0, 0, 1, 0]) {
                     if let Some(mut paid) = self.apply_payment_plan(next, plan) {
                         if paid.move_card(grace, Zone::Hand, Zone::Graveyard) {
                             paid.flags &= !PACT_DUE;
