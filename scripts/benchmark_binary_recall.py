@@ -32,6 +32,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-discrepancy", type=int, default=14)
     parser.add_argument("--recorded-top", type=int, default=2)
     parser.add_argument("--reuse-prefork-result")
+    parser.add_argument(
+        "--exact-rescue",
+        action="store_true",
+        help="run unresolved keeps through the current exact-order fast solver",
+    )
+    parser.add_argument("--rescue-initial-state-limit", type=int, default=20_000)
+    parser.add_argument("--rescue-cap-state-limit", type=int, default=60_000)
     return parser.parse_args()
 
 
@@ -201,6 +208,64 @@ def main() -> int:
             flush=True,
         )
 
+    packed_hits = set(current_hits)
+    rescue = {
+        "enabled": args.exact_rescue,
+        "evaluated": 0,
+        "initial_caps": 0,
+        "hits": 0,
+        "hit_game_indices": [],
+        "wall_seconds": 0.0,
+        "cpu_seconds": 0.0,
+    }
+    if args.exact_rescue and unresolved:
+        rescue["evaluated"] = len(unresolved)
+        exact_initial, wall, cpu = invoke(
+            current_bin,
+            "solve-keep-fast-batch-jsonl",
+            [
+                old_request(record, args.rescue_initial_state_limit)
+                for record in unresolved
+            ],
+        )
+        rescue["wall_seconds"] += wall
+        rescue["cpu_seconds"] += cpu
+        exact_final = list(exact_initial)
+        capped_indices = [
+            index
+            for index, outcome in enumerate(exact_initial)
+            if outcome.get("turn") is None and outcome.get("capped")
+        ]
+        rescue["initial_caps"] = len(capped_indices)
+        if capped_indices:
+            reruns, wall, cpu = invoke(
+                current_bin,
+                "solve-keep-fast-batch-jsonl",
+                [
+                    old_request(unresolved[index], args.rescue_cap_state_limit)
+                    for index in capped_indices
+                ],
+            )
+            rescue["wall_seconds"] += wall
+            rescue["cpu_seconds"] += cpu
+            for index, outcome in zip(capped_indices, reruns, strict=True):
+                exact_final[index] = outcome
+        rescue_hits = {
+            unresolved[index]["game_index"]
+            for index, outcome in enumerate(exact_final)
+            if outcome.get("turn") is not None
+        }
+        current_hits.update(rescue_hits)
+        rescue["hits"] = len(rescue_hits)
+        rescue["hit_game_indices"] = sorted(rescue_hits)
+        current_wall += rescue["wall_seconds"]
+        current_cpu += rescue["cpu_seconds"]
+        print(
+            f"[exact rescue] evaluated={len(unresolved)} hits={len(rescue_hits)} "
+            f"caps={len(capped_indices)} wall={rescue['wall_seconds']:.3f}s",
+            flush=True,
+        )
+
     result = {
         "games": len(records),
         "seed": corpus["request"]["seed"],
@@ -222,6 +287,8 @@ def main() -> int:
         "current": {
             "hits": len(current_hits),
             "hit_game_indices": sorted(current_hits),
+            "packed_hits": len(packed_hits),
+            "rescue": rescue,
             "old_hits_recalled": len(current_hits & old_hits),
             "old_hits_missed": sorted(old_hits - current_hits),
             "new_hits_over_prefork": len(current_hits - old_hits),

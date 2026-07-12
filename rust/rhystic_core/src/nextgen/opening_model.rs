@@ -2490,21 +2490,68 @@ impl OpeningOutcomeModel for EngineOpeningModel {
         &self,
         state: Self::State,
         transition: &InformationTransition<Self::State>,
-    ) -> Option<u16> {
+    ) -> Option<u64> {
         let next = match transition {
             InformationTransition::Deterministic(next) => *next,
             InformationTransition::Chance(outcomes) => outcomes.first()?.0,
         };
-        state.hand.iter().find_map(|slot| {
-            let consumed = next.graveyard.contains(slot)
-                || next.exile.contains(slot)
-                || next
-                    .battlefield
-                    .as_slice()
-                    .iter()
-                    .any(|permanent| permanent.source().card_slot() == Some(slot));
-            consumed.then_some(u16::from(self.semantic_classes[slot as usize]) + 1)
-        })
+        let mut signature = 0xcbf2_9ce4_8422_2325_u64;
+        let mut mixed = false;
+        let mut mix = |tag: u8, value: u64| {
+            signature ^= u64::from(tag);
+            signature = signature.wrapping_mul(0x100_0000_01b3);
+            signature ^= value;
+            signature = signature.wrapping_mul(0x100_0000_01b3);
+            mixed = true;
+        };
+
+        for slot in state.hand.difference(next.hand).iter() {
+            mix(1, u64::from(self.semantic_classes[slot as usize]));
+        }
+        for slot in next.hand.difference(state.hand).iter() {
+            mix(2, u64::from(self.semantic_classes[slot as usize]));
+        }
+
+        let mut previous_permanents = CardMask::EMPTY;
+        for slot in state
+            .battlefield
+            .as_slice()
+            .iter()
+            .filter_map(|permanent| permanent.source().card_slot())
+        {
+            previous_permanents.insert(slot);
+        }
+        let mut next_permanents = CardMask::EMPTY;
+        for slot in next
+            .battlefield
+            .as_slice()
+            .iter()
+            .filter_map(|permanent| permanent.source().card_slot())
+        {
+            next_permanents.insert(slot);
+        }
+        for slot in next_permanents.difference(previous_permanents).iter() {
+            mix(3, u64::from(self.semantic_classes[slot as usize]));
+        }
+
+        if next.library.known_top_len() > 0 {
+            let top = next.library.chance_draws()[0].slot;
+            mix(4, u64::from(self.semantic_classes[top as usize]));
+        }
+        for (index, amount) in next.mana.0.iter().enumerate() {
+            if *amount > 0 {
+                mix(5 + index as u8, u64::from(*amount));
+            }
+        }
+        if state.flags != next.flags {
+            mix(12, u64::from(state.flags ^ next.flags));
+        }
+        if state.commander != next.commander {
+            mix(13, u64::from(next.commander.zone as u8));
+            mix(14, u64::from(next.commander.cast_count));
+        }
+
+        mixed.then_some(signature)
     }
 }
 
@@ -2533,7 +2580,9 @@ fn mana_options(color_mask: u8, colorless: u8) -> SmallVec<[ManaPool; 5]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nextgen::{OpeningOutcomeSolver, PackedLibrary, ReferenceSolver};
+    use crate::nextgen::{
+        OpeningExistenceDiscrepancySolver, OpeningOutcomeSolver, PackedLibrary, ReferenceSolver,
+    };
 
     fn model(names: &[&str]) -> EngineOpeningModel {
         let deck = DeckSpec::compile(
@@ -3499,6 +3548,153 @@ mod tests {
             InformationTransition::Deterministic(next)
                 if next.commander.zone == CommanderZone::Command && next.hand.contains(2)
         )));
+    }
+
+    #[test]
+    fn exact_top_vampiric_tutor_ritual_line_reaches_rhystic() {
+        let names = [
+            "Vampiric Tutor",
+            "Dark Ritual",
+            "Underground Sea",
+            "Volcanic Island",
+            "Rhystic Study",
+            "Commandeer",
+            "Gemstone Caverns",
+            "Mox Amber",
+        ];
+        let deck = DeckSpec::compile(&names.map(str::to_string)).expect("fixture deck");
+        let model = EngineOpeningModel::compile(&deck, 2);
+        let vampiric = deck.slot("Vampiric Tutor").unwrap();
+        let ritual = deck.slot("Dark Ritual").unwrap();
+        let underground = deck.slot("Underground Sea").unwrap();
+        let volcanic = deck.slot("Volcanic Island").unwrap();
+        let rhystic = deck.slot("Rhystic Study").unwrap();
+        let commandeer = deck.slot("Commandeer").unwrap();
+        let caverns = deck.slot("Gemstone Caverns").unwrap();
+        let amber = deck.slot("Mox Amber").unwrap();
+        let mut library = PackedLibrary::new(CardMask::EMPTY);
+        for slot in [rhystic, commandeer, caverns, amber] {
+            library.insert_unknown(slot);
+        }
+        for slot in [amber, caverns, commandeer] {
+            library.push_known_top(slot);
+        }
+        let mut hand = CardMask::EMPTY;
+        for slot in [vampiric, ritual, underground, volcanic] {
+            hand.insert(slot);
+        }
+        let mut state = PackedStateV2 {
+            hand,
+            library,
+            ..PackedStateV2::default()
+        };
+        let initial = state;
+
+        let mut transitions = SmallVec::new();
+        model.generate_turn_draw(state, &mut transitions);
+        let InformationTransition::Chance(draws) = transitions.pop().expect("turn draw") else {
+            panic!("known turn draw must use a chance transition");
+        };
+        state = draws[0].0;
+
+        transitions.clear();
+        model.generate_land_plays(state, &mut transitions);
+        state = transitions
+            .iter()
+            .filter_map(|transition| match transition {
+                InformationTransition::Deterministic(next) => Some(*next),
+                InformationTransition::Chance(_) => None,
+            })
+            .find(|next| {
+                next.battlefield
+                    .contains_source(PermanentSource::card(underground))
+            })
+            .expect("play Underground Sea");
+
+        transitions.clear();
+        model.generate_tutors(state, &mut transitions);
+        let tutor_families = transitions
+            .iter()
+            .filter_map(|transition| model.transition_family(state, transition))
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(tutor_families.len(), transitions.len());
+        let generated_tops = transitions
+            .iter()
+            .filter_map(|transition| match transition {
+                InformationTransition::Deterministic(next) if next.library.known_top_len() == 1 => {
+                    Some(next.library.chance_draws()[0].slot)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        state = transitions
+            .iter()
+            .filter_map(|transition| match transition {
+                InformationTransition::Deterministic(next) => Some(*next),
+                InformationTransition::Chance(_) => None,
+            })
+            .find(|next| {
+                next.library.known_top_len() == 1 && next.library.chance_draws()[0].slot == rhystic
+            })
+            .unwrap_or_else(|| panic!("Vampiric Tutor targets were {generated_tops:?}"));
+
+        transitions.clear();
+        model.generate_end_turn(state, &mut transitions);
+        state = transitions
+            .iter()
+            .filter_map(|transition| match transition {
+                InformationTransition::Deterministic(next) => Some(*next),
+                InformationTransition::Chance(_) => None,
+            })
+            .next()
+            .expect("end turn");
+        transitions.clear();
+        model.generate_turn_draw(state, &mut transitions);
+        let InformationTransition::Chance(draws) = transitions.pop().expect("turn-two draw") else {
+            panic!("known turn-two draw must use a chance transition");
+        };
+        state = draws[0].0;
+
+        transitions.clear();
+        model.generate_land_plays(state, &mut transitions);
+        state = transitions
+            .iter()
+            .filter_map(|transition| match transition {
+                InformationTransition::Deterministic(next) => Some(*next),
+                InformationTransition::Chance(_) => None,
+            })
+            .find(|next| {
+                next.battlefield
+                    .contains_source(PermanentSource::card(volcanic))
+            })
+            .expect("play Volcanic Island");
+
+        transitions.clear();
+        model.generate_rituals(state, &mut transitions);
+        state = transitions
+            .iter()
+            .filter_map(|transition| match transition {
+                InformationTransition::Deterministic(next) => Some(*next),
+                InformationTransition::Chance(_) => None,
+            })
+            .find(|next| next.graveyard.contains(ritual))
+            .expect("cast Dark Ritual");
+
+        transitions.clear();
+        model.generate_direct_engine_casts(state, &mut transitions);
+        let terminal = transitions
+            .iter()
+            .filter_map(|transition| match transition {
+                InformationTransition::Deterministic(next) => Some(*next),
+                InformationTransition::Chance(_) => None,
+            })
+            .find(|next| model.opening_outcome(*next).is_some())
+            .expect("cast Rhystic Study");
+        assert_eq!(model.opening_outcome(terminal).unwrap().rhystic_turn_2, 1.0);
+
+        let mut solver = OpeningExistenceDiscrepancySolver::new(&model, 128);
+        let result = solver.solve(initial, 24, 20);
+        assert!(result.found, "search metrics: {:?}", result.metrics);
     }
 
     #[test]

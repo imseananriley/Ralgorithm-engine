@@ -64,7 +64,7 @@ mod tests {
             &self,
             _state: Self::State,
             transition: &InformationTransition<Self::State>,
-        ) -> Option<u16> {
+        ) -> Option<u64> {
             match transition {
                 InformationTransition::Deterministic(2 | 3) => Some(7),
                 InformationTransition::Deterministic(1) => Some(8),
@@ -116,7 +116,7 @@ pub trait OpeningOutcomeModel: InformationModel {
         &self,
         _state: Self::State,
         _transition: &InformationTransition<Self::State>,
-    ) -> Option<u16> {
+    ) -> Option<u64> {
         None
     }
 }
