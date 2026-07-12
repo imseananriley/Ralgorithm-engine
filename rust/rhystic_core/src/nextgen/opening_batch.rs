@@ -2,10 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 use super::{
-    evaluate_opening_outcome_policy, independent_sample_selected, merge_batch_reports,
-    slot_permutation, BatchConfig, BatchEvaluation, BatchEvaluator, BatchReport, CardMask,
-    DeckSpec, EngineOpeningModel, Estimate, MultiFidelityAccumulator, OpeningOutcome,
-    OpeningOutcomeSolver, PackedLibrary, PackedStateV2, VisibleOpeningPolicy,
+    independent_sample_selected, merge_batch_reports, slot_permutation, BatchConfig,
+    BatchEvaluation, BatchEvaluator, BatchReport, CardMask, DeckSpec, EngineOpeningModel, Estimate,
+    MultiFidelityAccumulator, OpeningOutcome, OpeningOutcomePolicySolver, OpeningOutcomeResult,
+    OpeningOutcomeSolver, PackedLibrary, PackedStateV2, SearchMetrics, VisibleOpeningPolicy,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -65,6 +65,8 @@ pub struct OpeningOutcomeAccumulator {
     pub rhystic_turn_2_sum: f64,
     pub heartwood_turn_1_sum: f64,
     pub heartwood_turn_2_sum: f64,
+    pub weighted_upper_sum: f64,
+    pub capped_samples: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -78,16 +80,21 @@ pub struct OpeningOutcomeSummary {
     pub heartwood_by_turn_2: f64,
     pub any_engine_by_turn_1: f64,
     pub any_engine_by_turn_2: f64,
+    pub weighted_ev_upper: f64,
+    pub capped_rate: f64,
 }
 
 impl OpeningOutcomeAccumulator {
-    fn push(&mut self, outcome: OpeningOutcome) {
+    fn push(&mut self, result: OpeningOutcomeResult) {
+        let outcome = result.outcome;
         self.samples += 1;
         self.weighted_ev_sum += outcome.weighted_ev;
         self.rhystic_turn_1_sum += outcome.rhystic_turn_1;
         self.rhystic_turn_2_sum += outcome.rhystic_turn_2;
         self.heartwood_turn_1_sum += outcome.heartwood_turn_1;
         self.heartwood_turn_2_sum += outcome.heartwood_turn_2;
+        self.weighted_upper_sum += result.upper_bound;
+        self.capped_samples += u64::from(result.capped);
     }
 
     fn merge(&mut self, other: Self) {
@@ -97,6 +104,8 @@ impl OpeningOutcomeAccumulator {
         self.rhystic_turn_2_sum += other.rhystic_turn_2_sum;
         self.heartwood_turn_1_sum += other.heartwood_turn_1_sum;
         self.heartwood_turn_2_sum += other.heartwood_turn_2_sum;
+        self.weighted_upper_sum += other.weighted_upper_sum;
+        self.capped_samples += other.capped_samples;
     }
 
     fn summarize(self, name: String) -> OpeningOutcomeSummary {
@@ -118,6 +127,8 @@ impl OpeningOutcomeAccumulator {
                 + rhystic_turn_2
                 + heartwood_turn_1
                 + heartwood_turn_2,
+            weighted_ev_upper: self.weighted_upper_sum / n,
+            capped_rate: self.capped_samples as f64 / n,
         }
     }
 }
@@ -132,7 +143,7 @@ struct CompiledVariant {
 
 #[derive(Debug, Copy, Clone)]
 struct OpeningGameEvaluation {
-    outcome: OpeningOutcome,
+    result: OpeningOutcomeResult,
     influenced: bool,
 }
 
@@ -305,8 +316,8 @@ fn run_shard(
                 low_mulligans[variant_index]
             },
         );
-        outcomes[variant_index].push(low.outcome);
-        multifidelity[variant_index].push_low(low.outcome.weighted_ev);
+        outcomes[variant_index].push(low.result);
+        multifidelity[variant_index].push_low(low.result.outcome.weighted_ev);
         if !request.strict_reference
             && independent_sample_selected(
                 request.seed,
@@ -323,11 +334,13 @@ fn run_shard(
                 true,
                 high_mulligans[variant_index],
             );
-            multifidelity[variant_index]
-                .push_correction(low.outcome.weighted_ev, high.outcome.weighted_ev);
+            multifidelity[variant_index].push_correction(
+                low.result.outcome.weighted_ev,
+                high.result.outcome.weighted_ev,
+            );
         }
         BatchEvaluation {
-            value: low.outcome.weighted_ev,
+            value: low.result.outcome.weighted_ev,
             influenced: low.influenced,
         }
     });
@@ -353,7 +366,7 @@ fn evaluate_game(
         );
         let visible: CardMask = permutation.iter().take(7).copied().collect();
         influenced |= !visible.intersect(variant.influence).is_empty();
-        let outcome = best_keep_outcome(
+        let result = best_keep_outcome(
             variant,
             visible,
             hand_size,
@@ -361,15 +374,12 @@ fn evaluate_game(
             depth,
             strict_reference,
         );
-        let keep =
-            hand_size == 3 || outcome.weighted_ev >= mulligan.continuation_ev[(stage + 1).min(5)];
+        let keep = hand_size == 3
+            || result.outcome.weighted_ev >= mulligan.continuation_ev[(stage + 1).min(5)];
         if !keep {
             continue;
         }
-        return OpeningGameEvaluation {
-            outcome,
-            influenced,
-        };
+        return OpeningGameEvaluation { result, influenced };
     }
     unreachable!("the mulligan floor always keeps the final hand")
 }
@@ -401,6 +411,7 @@ fn train_mulligan_policy(
                 request.depth,
                 strict_reference,
             )
+            .outcome
             .weighted_ev;
             total += if stage + 1 == hand_sizes.len() {
                 keep
@@ -420,15 +431,43 @@ fn best_keep_outcome(
     gemstone_live: bool,
     depth: u8,
     strict_reference: bool,
-) -> OpeningOutcome {
+) -> OpeningOutcomeResult {
     let model = if strict_reference {
         &variant.reference_model
     } else {
         &variant.model
     };
+    if strict_reference {
+        let mut solver = OpeningOutcomeSolver::new(model);
+        best_keep_outcome_with(variant, model, visible, hand_size, gemstone_live, |start| {
+            solver.solve(start, depth)
+        })
+    } else {
+        let policy = VisibleOpeningPolicy::new(model);
+        let mut solver = OpeningOutcomePolicySolver::new(model, &policy);
+        best_keep_outcome_with(variant, model, visible, hand_size, gemstone_live, |start| {
+            solver.solve(start, depth)
+        })
+    }
+}
+
+fn best_keep_outcome_with(
+    variant: &CompiledVariant,
+    model: &EngineOpeningModel,
+    visible: CardMask,
+    hand_size: usize,
+    gemstone_live: bool,
+    mut solve: impl FnMut(PackedStateV2) -> OpeningOutcomeResult,
+) -> OpeningOutcomeResult {
     let slots: Vec<_> = visible.iter().collect();
     let bottom_count = 7usize.saturating_sub(hand_size);
-    let mut best = OpeningOutcome::default();
+    let mut best = OpeningOutcomeResult {
+        outcome: OpeningOutcome::default(),
+        lower_bound: 0.0,
+        upper_bound: 0.0,
+        capped: false,
+        metrics: SearchMetrics::default(),
+    };
     for selection in 0u8..(1u8 << slots.len()) {
         if selection.count_ones() as usize != bottom_count {
             continue;
@@ -448,27 +487,33 @@ fn best_keep_outcome(
             library,
             ..PackedStateV2::default()
         };
-        let candidate = model
+        let mut candidate = OpeningOutcomeResult {
+            outcome: OpeningOutcome::default(),
+            lower_bound: 0.0,
+            upper_bound: 0.0,
+            capped: false,
+            metrics: SearchMetrics::default(),
+        };
+        for result in model
             .pregame_states(state, gemstone_live)
             .into_iter()
-            .map(|start| {
-                if strict_reference {
-                    OpeningOutcomeSolver::new(model).solve(start, depth).outcome
-                } else {
-                    evaluate_opening_outcome_policy(
-                        model,
-                        &VisibleOpeningPolicy::new(model),
-                        start,
-                        depth,
-                    )
-                    .outcome
-                }
-            })
-            .max_by(|left, right| left.weighted_ev.total_cmp(&right.weighted_ev))
-            .unwrap_or_default();
-        if candidate.weighted_ev > best.weighted_ev {
-            best = candidate;
+            .map(&mut solve)
+        {
+            candidate.upper_bound = candidate.upper_bound.max(result.upper_bound);
+            if result.outcome.weighted_ev > candidate.outcome.weighted_ev {
+                candidate.outcome = result.outcome;
+                candidate.lower_bound = result.lower_bound;
+                candidate.metrics = result.metrics;
+            }
         }
+        candidate.capped = candidate.upper_bound > candidate.lower_bound + f64::EPSILON;
+        best.upper_bound = best.upper_bound.max(candidate.upper_bound);
+        if candidate.outcome.weighted_ev > best.outcome.weighted_ev {
+            best.outcome = candidate.outcome;
+            best.lower_bound = candidate.lower_bound;
+            best.metrics = candidate.metrics;
+        }
+        best.capped = best.upper_bound > best.lower_bound + f64::EPSILON;
     }
     best
 }
@@ -627,6 +672,6 @@ mod tests {
 
         let outcome = best_keep_outcome(&variant, visible, 3, false, 16, true);
 
-        assert_eq!(outcome.rhystic_turn_1, 1.0);
+        assert_eq!(outcome.outcome.rhystic_turn_1, 1.0);
     }
 }

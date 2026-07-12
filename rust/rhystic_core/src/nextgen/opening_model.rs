@@ -2303,7 +2303,7 @@ fn mana_options(color_mask: u8, colorless: u8) -> SmallVec<[ManaPool; 5]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nextgen::{PackedLibrary, ReferenceSolver};
+    use crate::nextgen::{OpeningOutcomeSolver, PackedLibrary, ReferenceSolver};
 
     fn model(names: &[&str]) -> EngineOpeningModel {
         let deck = DeckSpec::compile(
@@ -2479,6 +2479,22 @@ mod tests {
         assert_eq!(turn_two.weighted_ev, 0.55);
         assert_eq!(turn_two.heartwood_turn_2, 1.0);
         assert_eq!(turn_two.any_engine(), 1.0);
+    }
+
+    #[test]
+    fn bounded_solver_reports_depth_truncation_instead_of_failure() {
+        let model = model(&["Rhystic Study", "Blank"]);
+        let state = PackedStateV2 {
+            hand: [1].into_iter().collect(),
+            library: PackedLibrary::new([0].into_iter().collect()),
+            ..PackedStateV2::default()
+        };
+        let result = OpeningOutcomeSolver::new(&model).solve(state, 0);
+
+        assert_eq!(result.lower_bound, 0.0);
+        assert_eq!(result.upper_bound, 1.0);
+        assert!(result.capped);
+        assert_eq!(result.metrics.depth_cutoffs, 1);
     }
 
     #[test]

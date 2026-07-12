@@ -50,8 +50,8 @@ pub use opening_batch::{
 };
 pub use opening_model::{EngineOpeningModel, OpeningMulliganPolicy, VisibleOpeningPolicy};
 pub use outcome::{
-    evaluate_opening_outcome_policy, OpeningOutcome, OpeningOutcomeModel, OpeningOutcomeResult,
-    OpeningOutcomeSolver,
+    evaluate_opening_outcome_policy, OpeningOutcome, OpeningOutcomeModel,
+    OpeningOutcomePolicySolver, OpeningOutcomeResult, OpeningOutcomeSolver,
 };
 pub use policy::{evaluate_compiled_policy, CompiledPolicy, PolicyResult};
 pub use reference_solver::{
