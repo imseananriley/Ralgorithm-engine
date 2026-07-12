@@ -4,8 +4,8 @@ use std::time::Instant;
 use super::{
     evaluate_opening_outcome_policy, independent_sample_selected, merge_batch_reports,
     slot_permutation, BatchConfig, BatchEvaluation, BatchEvaluator, BatchReport, CardMask,
-    DeckSpec, EngineOpeningModel, Estimate, MultiFidelityAccumulator, OpeningMulliganPolicy,
-    OpeningOutcome, OpeningOutcomeSolver, PackedLibrary, PackedStateV2, VisibleOpeningPolicy,
+    DeckSpec, EngineOpeningModel, Estimate, MultiFidelityAccumulator, OpeningOutcome,
+    OpeningOutcomeSolver, PackedLibrary, PackedStateV2, VisibleOpeningPolicy,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,6 +43,8 @@ pub struct OpeningBatchRequest {
     pub workers: usize,
     #[serde(default)]
     pub exact_slot_draws: bool,
+    #[serde(default = "default_mulligan_pilot_samples")]
+    pub mulligan_pilot_samples: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -52,6 +54,7 @@ pub struct OpeningBatchResponse {
     pub report: BatchReport,
     pub multifidelity: Vec<Option<Estimate>>,
     pub outcomes: Vec<OpeningOutcomeSummary>,
+    pub mulligan_continuation_ev: Vec<[f64; 6]>,
 }
 
 #[derive(Debug, Copy, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -133,6 +136,11 @@ struct OpeningGameEvaluation {
     influenced: bool,
 }
 
+#[derive(Debug, Copy, Clone, Default)]
+struct MulliganEvPolicy {
+    continuation_ev: [f64; 6],
+}
+
 pub fn evaluate_opening_batch(
     request: &OpeningBatchRequest,
 ) -> Result<OpeningBatchResponse, String> {
@@ -165,6 +173,18 @@ pub fn evaluate_opening_batch(
         .iter()
         .map(|variant| variant.name.clone())
         .collect();
+    let low_mulligans: Vec<_> = variants
+        .iter()
+        .map(|variant| train_mulligan_policy(request, variant, false))
+        .collect();
+    let high_mulligans = if request.strict_reference || request.correction_numerator > 0 {
+        variants
+            .iter()
+            .map(|variant| train_mulligan_policy(request, variant, true))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let workers = request.workers.max(1).min(request.samples.max(1) as usize);
     let started = Instant::now();
     let outputs = std::thread::scope(|scope| {
@@ -174,12 +194,23 @@ pub fn evaluate_opening_batch(
         let mut start = request.sample_start;
         let variants = &variants;
         let names = &names;
+        let low_mulligans = &low_mulligans;
+        let high_mulligans = &high_mulligans;
         for worker in 0..workers {
             let count = base + u64::from((worker as u64) < remainder);
             let shard_start = start;
             start += count;
-            handles
-                .push(scope.spawn(move || run_shard(request, variants, names, shard_start, count)));
+            handles.push(scope.spawn(move || {
+                run_shard(
+                    request,
+                    variants,
+                    names,
+                    low_mulligans,
+                    high_mulligans,
+                    shard_start,
+                    count,
+                )
+            }));
         }
         handles
             .into_iter()
@@ -214,7 +245,9 @@ pub fn evaluate_opening_batch(
         } else {
             "compiled visible-information policy".to_string()
         },
-        mulligan_policy: "commander London 7,7,6,5,4,3; frozen visible-hand v1".to_string(),
+        mulligan_policy:
+            "commander London 7,7,6,5,4,3; independent-pilot continuation EV; exact bottoms"
+                .to_string(),
         report,
         multifidelity: multifidelity
             .into_iter()
@@ -222,9 +255,17 @@ pub fn evaluate_opening_batch(
             .collect(),
         outcomes: outcomes
             .into_iter()
-            .zip(names)
+            .zip(names.clone())
             .map(|(accumulator, name)| accumulator.summarize(name))
             .collect(),
+        mulligan_continuation_ev: if request.strict_reference {
+            high_mulligans
+        } else {
+            low_mulligans
+        }
+        .into_iter()
+        .map(|policy| policy.continuation_ev)
+        .collect(),
     })
 }
 
@@ -232,6 +273,8 @@ fn run_shard(
     request: &OpeningBatchRequest,
     variants: &[CompiledVariant],
     names: &[String],
+    low_mulligans: &[MulliganEvPolicy],
+    high_mulligans: &[MulliganEvPolicy],
     sample_start: u64,
     samples: u64,
 ) -> (
@@ -247,7 +290,6 @@ fn run_shard(
         discordance_limit: request.discordance_limit,
         progress_interval: request.progress_interval,
     });
-    let mulligan = OpeningMulliganPolicy::default();
     let mut multifidelity = vec![MultiFidelityAccumulator::default(); variants.len()];
     let mut outcomes = vec![OpeningOutcomeAccumulator::default(); variants.len()];
     let report = batch.run(names, |sample_index, sample_seed, variant_index| {
@@ -257,7 +299,11 @@ fn run_shard(
             sample_seed,
             request.depth,
             request.strict_reference,
-            mulligan,
+            if request.strict_reference {
+                high_mulligans[variant_index]
+            } else {
+                low_mulligans[variant_index]
+            },
         );
         outcomes[variant_index].push(low.outcome);
         multifidelity[variant_index].push_low(low.outcome.weighted_ev);
@@ -275,7 +321,7 @@ fn run_shard(
                 sample_seed,
                 request.depth,
                 true,
-                mulligan,
+                high_mulligans[variant_index],
             );
             multifidelity[variant_index]
                 .push_correction(low.outcome.weighted_ev, high.outcome.weighted_ev);
@@ -294,13 +340,8 @@ fn evaluate_game(
     sample_seed: u64,
     depth: u8,
     strict_reference: bool,
-    mulligan: OpeningMulliganPolicy,
+    mulligan: MulliganEvPolicy,
 ) -> OpeningGameEvaluation {
-    let model = if strict_reference {
-        &variant.reference_model
-    } else {
-        &variant.model
-    };
     let gemstone_live = !sample_seed.is_multiple_of(4);
     let hand_sizes = [7usize, 7, 6, 5, 4, 3];
     let mut influenced = false;
@@ -312,34 +353,102 @@ fn evaluate_game(
         );
         let visible: CardMask = permutation.iter().take(7).copied().collect();
         influenced |= !visible.intersect(variant.influence).is_empty();
-        let visible_state = PackedStateV2 {
-            hand: visible,
-            library: PackedLibrary::new(variant.deck_mask.difference(visible)),
-            ..PackedStateV2::default()
-        };
+        let outcome = best_keep_outcome(
+            variant,
+            visible,
+            hand_size,
+            gemstone_live,
+            depth,
+            strict_reference,
+        );
         let keep =
-            hand_size == 3 || model.should_keep(mulligan, visible_state, hand_size, gemstone_live);
+            hand_size == 3 || outcome.weighted_ev >= mulligan.continuation_ev[(stage + 1).min(5)];
         if !keep {
             continue;
         }
-        let mut bottom_order: Vec<_> = visible.iter().collect();
-        bottom_order.sort_by_key(|slot| (model.bottom_priority(*slot), *slot));
-        let bottoms: Vec<_> = bottom_order.into_iter().take(7 - hand_size).collect();
-        let mut hand = visible;
-        for bottom in &bottoms {
-            hand.remove(*bottom);
+        return OpeningGameEvaluation {
+            outcome,
+            influenced,
+        };
+    }
+    unreachable!("the mulligan floor always keeps the final hand")
+}
+
+fn train_mulligan_policy(
+    request: &OpeningBatchRequest,
+    variant: &CompiledVariant,
+    strict_reference: bool,
+) -> MulliganEvPolicy {
+    let samples = request.mulligan_pilot_samples.max(1);
+    let hand_sizes = [7usize, 7, 6, 5, 4, 3];
+    let pilot_seed = request.seed ^ 0x4d55_4c4c_5049_4c4f;
+    let mut continuation_ev = [0.0; 6];
+    for stage in (0..hand_sizes.len()).rev() {
+        let mut total = 0.0;
+        for pilot in 0..samples {
+            let permutation = slot_permutation(
+                variant.deck_len,
+                pilot_seed ^ pilot.rotate_left(23),
+                stage as u64,
+            );
+            let visible: CardMask = permutation.iter().take(7).copied().collect();
+            let gemstone_live = independent_sample_selected(pilot_seed, pilot, 3, 4);
+            let keep = best_keep_outcome(
+                variant,
+                visible,
+                hand_sizes[stage],
+                gemstone_live,
+                request.depth,
+                strict_reference,
+            )
+            .weighted_ev;
+            total += if stage + 1 == hand_sizes.len() {
+                keep
+            } else {
+                keep.max(continuation_ev[stage + 1])
+            };
         }
+        continuation_ev[stage] = total / samples as f64;
+    }
+    MulliganEvPolicy { continuation_ev }
+}
+
+fn best_keep_outcome(
+    variant: &CompiledVariant,
+    visible: CardMask,
+    hand_size: usize,
+    gemstone_live: bool,
+    depth: u8,
+    strict_reference: bool,
+) -> OpeningOutcome {
+    let model = if strict_reference {
+        &variant.reference_model
+    } else {
+        &variant.model
+    };
+    let slots: Vec<_> = visible.iter().collect();
+    let bottom_count = 7usize.saturating_sub(hand_size);
+    let mut best = OpeningOutcome::default();
+    for selection in 0u8..(1u8 << slots.len()) {
+        if selection.count_ones() as usize != bottom_count {
+            continue;
+        }
+        let mut hand = visible;
         let mut library = PackedLibrary::new(variant.deck_mask.difference(visible));
-        for bottom in bottoms {
-            library.insert_unknown(bottom);
-            library.push_known_bottom(bottom);
+        for (index, slot) in slots.iter().copied().enumerate() {
+            if selection & (1 << index) == 0 {
+                continue;
+            }
+            hand.remove(slot);
+            library.insert_unknown(slot);
+            library.push_known_bottom(slot);
         }
         let state = PackedStateV2 {
             hand,
             library,
             ..PackedStateV2::default()
         };
-        let outcome = model
+        let candidate = model
             .pregame_states(state, gemstone_live)
             .into_iter()
             .map(|start| {
@@ -357,12 +466,11 @@ fn evaluate_game(
             })
             .max_by(|left, right| left.weighted_ev.total_cmp(&right.weighted_ev))
             .unwrap_or_default();
-        return OpeningGameEvaluation {
-            outcome,
-            influenced,
-        };
+        if candidate.weighted_ev > best.weighted_ev {
+            best = candidate;
+        }
     }
-    unreachable!("the mulligan floor always keeps the final hand")
+    best
 }
 
 const fn default_seed() -> u64 {
@@ -395,6 +503,10 @@ const fn default_correction_denominator() -> u64 {
 
 const fn default_workers() -> usize {
     1
+}
+
+const fn default_mulligan_pilot_samples() -> u64 {
+    64
 }
 
 #[cfg(test)]
@@ -434,6 +546,7 @@ mod tests {
             correction_denominator: 1,
             workers: 1,
             exact_slot_draws: false,
+            mulligan_pilot_samples: 8,
         };
         let left = evaluate_opening_batch(&request).expect("batch");
         let right = evaluate_opening_batch(&request).expect("batch");
@@ -484,7 +597,36 @@ mod tests {
             correction_denominator: 1,
             workers: 1,
             exact_slot_draws: false,
+            mulligan_pilot_samples: 8,
         };
         assert!(evaluate_opening_batch(&request).is_err());
+    }
+
+    #[test]
+    fn exact_london_bottoms_preserve_the_winning_subset() {
+        let names = [
+            "Ancient Tomb",
+            "Lotus Petal",
+            "Rhystic Study",
+            "Blank A",
+            "Blank B",
+            "Blank C",
+            "Blank D",
+            "Blank library",
+        ]
+        .map(str::to_string);
+        let deck = DeckSpec::compile(&names).expect("fixture deck");
+        let variant = CompiledVariant {
+            model: EngineOpeningModel::compile(&deck, 2),
+            reference_model: EngineOpeningModel::compile(&deck, 2).with_quotient_draws(false),
+            deck_mask: deck.card_mask(),
+            deck_len: deck.cards().len(),
+            influence: CardMask::EMPTY,
+        };
+        let visible = (0..7).collect();
+
+        let outcome = best_keep_outcome(&variant, visible, 3, false, 16, true);
+
+        assert_eq!(outcome.rhystic_turn_1, 1.0);
     }
 }
