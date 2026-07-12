@@ -56,6 +56,8 @@ pub struct OpeningBatchRequest {
     pub publication_mode: bool,
     #[serde(default = "default_work_chunk_size")]
     pub work_chunk_size: u64,
+    #[serde(default = "default_policy_bottom_candidate_limit")]
+    pub policy_bottom_candidate_limit: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -164,6 +166,7 @@ struct CompiledVariant {
     deck_len: usize,
     influence: CardMask,
     support_manifest: OpeningSupportManifest,
+    policy_bottom_candidate_limit: usize,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -228,6 +231,7 @@ pub fn evaluate_opening_batch(
             deck_len: deck.cards().len(),
             influence,
             support_manifest,
+            policy_bottom_candidate_limit: request.policy_bottom_candidate_limit.max(1),
         });
     }
     validate_variant_alignment(request)?;
@@ -322,9 +326,15 @@ pub fn evaluate_opening_batch(
         } else {
             "compiled visible-information policy".to_string()
         },
-        mulligan_policy:
-            "commander London 7,7,6,5,4,3; independent-pilot continuation EV; exact bottoms"
-                .to_string(),
+        mulligan_policy: if request.strict_reference {
+            "commander London 7,7,6,5,4,3; independent-pilot continuation EV; exhaustive bottoms"
+                .to_string()
+        } else {
+            format!(
+                "commander London 7,7,6,5,4,3; independent-pilot continuation EV; top {} visible-ranked bottom subsets",
+                request.policy_bottom_candidate_limit.max(1)
+            )
+        },
         report,
         multifidelity: multifidelity
             .into_iter()
@@ -436,6 +446,7 @@ fn model_digest(request: &OpeningBatchRequest) -> String {
         request.max_turn,
         request.exact_slot_draws,
         request.commander_identity_mask,
+        request.policy_bottom_candidate_limit,
         request
             .variants
             .iter()
@@ -628,15 +639,27 @@ fn best_keep_outcome(
     };
     if strict_reference {
         let mut solver = OpeningOutcomeSolver::new(model);
-        best_keep_outcome_with(variant, model, visible, hand_size, gemstone_live, |start| {
-            solver.solve(start, depth)
-        })
+        best_keep_outcome_with(
+            variant,
+            model,
+            visible,
+            hand_size,
+            gemstone_live,
+            usize::MAX,
+            |start| solver.solve(start, depth),
+        )
     } else {
         let policy = VisibleOpeningPolicy::new(model);
         let mut solver = OpeningOutcomePolicySolver::new(model, &policy);
-        best_keep_outcome_with(variant, model, visible, hand_size, gemstone_live, |start| {
-            solver.solve(start, depth)
-        })
+        best_keep_outcome_with(
+            variant,
+            model,
+            visible,
+            hand_size,
+            gemstone_live,
+            variant.policy_bottom_candidate_limit,
+            |start| solver.solve(start, depth),
+        )
     }
 }
 
@@ -646,17 +669,12 @@ fn best_keep_outcome_with(
     visible: CardMask,
     hand_size: usize,
     gemstone_live: bool,
+    candidate_limit: usize,
     mut solve: impl FnMut(PackedStateV2) -> OpeningOutcomeResult,
 ) -> OpeningOutcomeResult {
     let slots: Vec<_> = visible.iter().collect();
     let bottom_count = 7usize.saturating_sub(hand_size);
-    let mut best = OpeningOutcomeResult {
-        outcome: OpeningOutcome::default(),
-        lower_bound: 0.0,
-        upper_bound: 0.0,
-        capped: false,
-        metrics: SearchMetrics::default(),
-    };
+    let mut candidate_states = Vec::new();
     for selection in 0u8..(1u8 << slots.len()) {
         if selection.count_ones() as usize != bottom_count {
             continue;
@@ -676,6 +694,18 @@ fn best_keep_outcome_with(
             library,
             ..PackedStateV2::default()
         };
+        candidate_states.push((model.mulligan_state_score(state, gemstone_live), state));
+    }
+    candidate_states.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
+    candidate_states.truncate(candidate_limit.min(candidate_states.len()));
+    let mut best = OpeningOutcomeResult {
+        outcome: OpeningOutcome::default(),
+        lower_bound: 0.0,
+        upper_bound: 0.0,
+        capped: false,
+        metrics: SearchMetrics::default(),
+    };
+    for (_, state) in candidate_states {
         let mut candidate = OpeningOutcomeResult {
             outcome: OpeningOutcome::default(),
             lower_bound: 0.0,
@@ -755,6 +785,10 @@ const fn default_work_chunk_size() -> u64 {
     8
 }
 
+const fn default_policy_bottom_candidate_limit() -> usize {
+    4
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -797,6 +831,7 @@ mod tests {
             commander_identity_mask: 0b1_1111,
             publication_mode: true,
             work_chunk_size: 2,
+            policy_bottom_candidate_limit: 4,
         };
         let left = evaluate_opening_batch(&request).expect("batch");
         let right = evaluate_opening_batch(&request).expect("batch");
@@ -855,6 +890,7 @@ mod tests {
             commander_identity_mask: 0b1_1111,
             publication_mode: true,
             work_chunk_size: 2,
+            policy_bottom_candidate_limit: 4,
         };
         assert!(evaluate_opening_batch(&request).is_err());
     }
@@ -884,6 +920,7 @@ mod tests {
                 &deck,
                 &EngineOpeningModel::compile(&deck, 2),
             ),
+            policy_bottom_candidate_limit: 4,
         };
         let visible = (0..7).collect();
 
@@ -917,6 +954,7 @@ mod tests {
             commander_identity_mask: 0b1_1111,
             publication_mode: true,
             work_chunk_size: 1,
+            policy_bottom_candidate_limit: 4,
         };
         assert!(evaluate_opening_batch(&request)
             .expect_err("short production deck")
@@ -958,6 +996,7 @@ mod tests {
             commander_identity_mask: 0b1_1111,
             publication_mode: true,
             work_chunk_size: 1,
+            policy_bottom_candidate_limit: 4,
         };
         assert!(evaluate_opening_batch(&request)
             .expect_err("unsupported tutor")

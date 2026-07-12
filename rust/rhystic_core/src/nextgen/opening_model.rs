@@ -555,6 +555,14 @@ impl EngineOpeningModel {
             .unwrap_or(i32::MIN)
     }
 
+    pub(crate) fn mulligan_state_score(
+        &self,
+        state: PackedStateV2,
+        gemstone_caverns_live: bool,
+    ) -> i32 {
+        self.visible_mulligan_score(state, gemstone_caverns_live)
+    }
+
     pub fn should_keep(
         &self,
         policy: OpeningMulliganPolicy,
