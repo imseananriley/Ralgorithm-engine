@@ -97,6 +97,7 @@ pub struct CardMetadata {
     pub opening_mana: OpeningManaProfile,
     pub opening_artifact: OpeningArtifactKind,
     pub opening_spell: OpeningSpellKind,
+    pub opening_creature: OpeningCreatureKind,
 }
 
 impl CardMetadata {
@@ -112,6 +113,7 @@ impl CardMetadata {
             opening_mana: opening_mana_profile(name),
             opening_artifact: opening_artifact_kind(name),
             opening_spell: opening_spell_kind(name),
+            opening_creature: opening_creature_kind(name),
         }
     }
 }
@@ -128,6 +130,7 @@ pub struct CardSpec {
     pub opening_mana: OpeningManaProfile,
     pub opening_artifact: OpeningArtifactKind,
     pub opening_spell: OpeningSpellKind,
+    pub opening_creature: OpeningCreatureKind,
     pub semantic_class: u8,
 }
 
@@ -145,6 +148,7 @@ impl CardSpec {
             opening_mana: metadata.opening_mana,
             opening_artifact: metadata.opening_artifact,
             opening_spell: metadata.opening_spell,
+            opening_creature: metadata.opening_creature,
             // Classes remain exact until an equivalence proof supplies a coarser partition.
             semantic_class: slot,
         }
@@ -238,6 +242,8 @@ pub enum OpeningSpellKind {
     DiabolicIntent = 17,
     InfernalPlunge = 18,
     RainOfFilth = 19,
+    MysticalTutor = 20,
+    EldritchEvolution = 21,
 }
 
 fn opening_spell_kind(name: &str) -> OpeningSpellKind {
@@ -261,7 +267,30 @@ fn opening_spell_kind(name: &str) -> OpeningSpellKind {
         "Diabolic Intent" => OpeningSpellKind::DiabolicIntent,
         "Infernal Plunge" => OpeningSpellKind::InfernalPlunge,
         "Rain of Filth" => OpeningSpellKind::RainOfFilth,
+        "Mystical Tutor" => OpeningSpellKind::MysticalTutor,
+        "Eldritch Evolution" => OpeningSpellKind::EldritchEvolution,
         _ => OpeningSpellKind::None,
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum OpeningCreatureKind {
+    #[default]
+    None = 0,
+    BirdsOfParadise = 1,
+    DeathriteShaman = 2,
+    Ragavan = 3,
+    TinderWall = 4,
+}
+
+fn opening_creature_kind(name: &str) -> OpeningCreatureKind {
+    match name {
+        "Birds of Paradise" => OpeningCreatureKind::BirdsOfParadise,
+        "Deathrite Shaman" => OpeningCreatureKind::DeathriteShaman,
+        "Ragavan, Nimble Pilferer" => OpeningCreatureKind::Ragavan,
+        "Tinder Wall" => OpeningCreatureKind::TinderWall,
+        _ => OpeningCreatureKind::None,
     }
 }
 

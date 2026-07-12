@@ -8,6 +8,7 @@ mod library;
 mod mana_closure;
 mod metrics;
 mod multifidelity;
+mod opening_batch;
 mod opening_model;
 mod policy;
 mod reference_solver;
@@ -26,7 +27,8 @@ pub use benchmark::{
 pub use card_mask::{CardMask, SlotId, MAX_DECK_SLOTS};
 pub use card_spec::{
     ActionClass, ActionTemplateMask, CardFlags, CardMetadata, CardSpec, DeckSpec,
-    OpeningArtifactKind, OpeningLandKind, OpeningManaProfile, OpeningSpellKind,
+    OpeningArtifactKind, OpeningCreatureKind, OpeningLandKind, OpeningManaProfile,
+    OpeningSpellKind,
 };
 pub use library::{ChanceDraw, ClassChanceDraw, PackedLibrary, KNOWN_TOP_CAPACITY};
 pub use mana_closure::{
@@ -37,6 +39,9 @@ pub use metrics::SearchMetrics;
 pub use multifidelity::{
     evaluate_multifidelity, Estimate, MultiFidelityAccumulator, MultiFidelityConfig,
     MultiFidelityReport,
+};
+pub use opening_batch::{
+    evaluate_opening_batch, OpeningBatchRequest, OpeningBatchResponse, OpeningVariantSpec,
 };
 pub use opening_model::{EngineOpeningModel, OpeningMulliganPolicy, VisibleOpeningPolicy};
 pub use policy::{evaluate_compiled_policy, CompiledPolicy, PolicyResult};

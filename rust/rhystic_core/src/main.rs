@@ -14,7 +14,10 @@ use rhystic_core::{
     },
     fnv1a_seed, generate_fixture_action_cores, generate_fixture_actions, mana_bench_cases,
     mana_checksum,
-    nextgen::{bench_nextgen, bench_opening_model, bench_packed_state_v2},
+    nextgen::{
+        bench_nextgen, bench_opening_model, bench_packed_state_v2, evaluate_opening_batch,
+        OpeningBatchRequest,
+    },
     pay_options, solve_keep, verify_action_fixtures, CloseTurnRequest, Cost, EarliestRequest,
     FixtureState, Mana, PolicyEvalFastRequest, PolicySimFastRequest,
     PolicyThresholdSweepFastRequest, RawDeltaFastRequest, RngShuffleAuditRequest, SolveKeepRequest,
@@ -31,7 +34,7 @@ fn parse_u8_arg(args: &[String], index: usize, name: &str) -> u8 {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("usage: rhystic-core-smoke <seed|bottom-count|pay-count|bench-mana|bench-nextgen|bench-state-v2|bench-opening-model|bench-fast-state|bench-fast-actions|verify-actions|expand-actions-jsonl|expand-actions-fast-jsonl|close-turn-jsonl|close-turn-fast-jsonl|solve-keep-jsonl|solve-keep-fast-jsonl|solve-keep-trace-fast-jsonl|solve-keep-fast-batch-jsonl|earliest-fast-jsonl|visible-hand-fast-batch-jsonl|policy-eval-fast-jsonl|policy-threshold-sweep-fast-jsonl|policy-sim-fast-jsonl|raw-delta-fast-jsonl|raw-delta-fast-stream-jsonl|rng-shuffle-audit-jsonl> [args...]");
+        eprintln!("usage: rhystic-core-smoke <seed|bottom-count|pay-count|bench-mana|bench-nextgen|bench-state-v2|bench-opening-model|bench-fast-state|bench-fast-actions|verify-actions|expand-actions-jsonl|expand-actions-fast-jsonl|close-turn-jsonl|close-turn-fast-jsonl|solve-keep-jsonl|solve-keep-fast-jsonl|solve-keep-trace-fast-jsonl|solve-keep-fast-batch-jsonl|earliest-fast-jsonl|visible-hand-fast-batch-jsonl|policy-eval-fast-jsonl|policy-threshold-sweep-fast-jsonl|policy-sim-fast-jsonl|raw-delta-fast-jsonl|raw-delta-fast-stream-jsonl|opening-batch-jsonl|rng-shuffle-audit-jsonl> [args...]");
         std::process::exit(2);
     }
     match args[1].as_str() {
@@ -659,6 +662,41 @@ fn main() {
                         .flush()
                         .expect("failed to flush raw delta stream JSONL output");
                 });
+            }
+        }
+        "opening-batch-jsonl" => {
+            let stdin = io::stdin();
+            let mut stdout = io::stdout().lock();
+            for line in stdin.lock().lines() {
+                let line = line.expect("failed to read stdin");
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let request: OpeningBatchRequest = match serde_json::from_str(&line) {
+                    Ok(request) => request,
+                    Err(err) => {
+                        writeln!(
+                            stdout,
+                            "{{\"error\":{}}}",
+                            serde_json::to_string(&err.to_string()).expect("error JSON")
+                        )
+                        .expect("failed to write JSONL error");
+                        stdout.flush().expect("failed to flush JSONL error");
+                        continue;
+                    }
+                };
+                match evaluate_opening_batch(&request) {
+                    Ok(response) => serde_json::to_writer(&mut stdout, &response)
+                        .expect("failed to write opening batch JSON"),
+                    Err(err) => write!(
+                        stdout,
+                        "{{\"error\":{}}}",
+                        serde_json::to_string(&err).expect("error JSON")
+                    )
+                    .expect("failed to write opening batch error"),
+                }
+                writeln!(stdout).expect("failed to write JSONL newline");
+                stdout.flush().expect("failed to flush opening batch JSONL");
             }
         }
         "rng-shuffle-audit-jsonl" => {

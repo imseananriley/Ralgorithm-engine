@@ -35,4 +35,4 @@ Every retained pass records:
 
 ## Implemented Migration Boundary
 
-The information-state `ReferenceSolver` and `CompiledPolicy` kernels operate only on observable states and explicit chance transitions. They are analytically tested but do not yet generate the complete Nick Fury card-action space. Until that port is complete, production experiments use the fixed-library solver with immutable shared library storage and registry-backed card metadata, and treat its result as an oracle/policy approximation rather than the publication estimand.
+The packed opening batch now provides a production visible-information path for lands, principal artifacts, direct mana, deterministic and random tutors, objective-relevant sacrifice lines, mana creatures, Rhystic Study, and Heartwood Storyteller. It uses explicit chance transitions, a frozen visible policy, paired slot permutations, and independently selected strict corrections. Unsupported post-engine interaction/value cards remain inert. The legacy solver remains the differential and strict-correction oracle for unported early lines.

@@ -3,8 +3,8 @@ use smallvec::SmallVec;
 use super::{
     compute_payment_plans, CardFlags, CardMask, CommanderZone, CompiledPolicy, DeckSpec,
     InformationModel, InformationTransition, ManaOption, ManaPool, ManaSource, OpeningArtifactKind,
-    OpeningLandKind, OpeningManaProfile, OpeningSpellKind, PackedStateV2, PermanentInstance,
-    PermanentSource, ResourceUse, SlotId, TokenKind, Zone,
+    OpeningCreatureKind, OpeningLandKind, OpeningManaProfile, OpeningSpellKind, PackedStateV2,
+    PermanentInstance, PermanentSource, ResourceUse, SlotId, TokenKind, Zone,
 };
 use crate::{pay_options, Cost};
 
@@ -26,6 +26,7 @@ enum OpeningCard {
     Land(LandSemantics),
     Artifact(OpeningArtifactKind),
     Spell(OpeningSpellKind),
+    Creature(OpeningCreatureKind),
     Engine { cost: Cost, values: [f64; 2] },
 }
 
@@ -41,6 +42,8 @@ pub struct EngineOpeningModel {
     max_turn: u8,
     direct_payments: bool,
     resource_microsteps: bool,
+    deathrite_external_land: bool,
+    angels_grace_slot: Option<SlotId>,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -75,9 +78,13 @@ impl EngineOpeningModel {
         let mut artifact_slots = CardMask::EMPTY;
         let mut card_flags = Vec::with_capacity(deck.cards().len());
         let mut card_colors = Vec::with_capacity(deck.cards().len());
+        let mut angels_grace_slot = None;
         for card in deck.cards() {
             card_flags.push(card.flags);
             card_colors.push(card.color_mask);
+            if card.name.as_ref() == "Angel's Grace" {
+                angels_grace_slot = Some(card.slot);
+            }
             if card.flags.contains(CardFlags::ARTIFACT) {
                 artifact_slots.insert(card.slot);
             }
@@ -98,6 +105,9 @@ impl EngineOpeningModel {
                 }
                 _ if !matches!(card.opening_spell, OpeningSpellKind::None) => {
                     OpeningCard::Spell(card.opening_spell)
+                }
+                _ if !matches!(card.opening_creature, OpeningCreatureKind::None) => {
+                    OpeningCard::Creature(card.opening_creature)
                 }
                 _ => OpeningCard::Inert,
             };
@@ -120,6 +130,8 @@ impl EngineOpeningModel {
             max_turn,
             direct_payments: true,
             resource_microsteps: false,
+            deathrite_external_land: true,
+            angels_grace_slot,
         }
     }
 
@@ -130,6 +142,11 @@ impl EngineOpeningModel {
 
     pub fn with_resource_microsteps(mut self, enabled: bool) -> Self {
         self.resource_microsteps = enabled;
+        self
+    }
+
+    pub fn with_deathrite_external_land(mut self, available: bool) -> Self {
+        self.deathrite_external_land = available;
         self
     }
 
@@ -205,6 +222,13 @@ impl EngineOpeningModel {
     fn spell_kind(&self, slot: SlotId) -> Option<OpeningSpellKind> {
         match self.card(slot) {
             Some(OpeningCard::Spell(kind)) => Some(*kind),
+            _ => None,
+        }
+    }
+
+    fn creature_kind(&self, slot: SlotId) -> Option<OpeningCreatureKind> {
+        match self.card(slot) {
+            Some(OpeningCard::Creature(kind)) => Some(*kind),
             _ => None,
         }
     }
@@ -316,7 +340,8 @@ impl EngineOpeningModel {
                     | OpeningSpellKind::ImperialSeal
                     | OpeningSpellKind::VampiricTutor
                     | OpeningSpellKind::EnlightenedTutor
-                    | OpeningSpellKind::SchemingSymmetry => 3,
+                    | OpeningSpellKind::SchemingSymmetry
+                    | OpeningSpellKind::MysticalTutor => 3,
                     OpeningSpellKind::DarkRitual
                     | OpeningSpellKind::ElvishSpiritGuide
                     | OpeningSpellKind::SimianSpiritGuide
@@ -330,8 +355,16 @@ impl EngineOpeningModel {
                     | OpeningSpellKind::CullingTheWeak
                     | OpeningSpellKind::DiabolicIntent
                     | OpeningSpellKind::InfernalPlunge
-                    | OpeningSpellKind::RainOfFilth => 2,
+                    | OpeningSpellKind::RainOfFilth
+                    | OpeningSpellKind::EldritchEvolution => 2,
                     OpeningSpellKind::None => 0,
+                },
+                Some(OpeningCard::Creature(kind)) => match kind {
+                    OpeningCreatureKind::BirdsOfParadise
+                    | OpeningCreatureKind::DeathriteShaman
+                    | OpeningCreatureKind::TinderWall => 2,
+                    OpeningCreatureKind::Ragavan => 1,
+                    OpeningCreatureKind::None => 0,
                 },
                 _ => 0,
             };
@@ -361,6 +394,7 @@ impl EngineOpeningModel {
             Some(OpeningCard::Land(_)) => 3,
             Some(OpeningCard::Artifact(_)) => 4,
             Some(OpeningCard::Spell(_)) => 5,
+            Some(OpeningCard::Creature(_)) => 4,
             Some(OpeningCard::Engine { .. }) => 6,
         }
     }
@@ -961,6 +995,23 @@ impl EngineOpeningModel {
                 sources.push(ManaSource::with_options(slot, options));
                 continue;
             }
+            match self.creature_kind(slot) {
+                Some(OpeningCreatureKind::BirdsOfParadise) if !permanent.fresh() => {
+                    sources.push(ManaSource::new(slot, mana_options(0b1_1111, 0)));
+                    continue;
+                }
+                Some(OpeningCreatureKind::TinderWall) => {
+                    sources.push(ManaSource::with_options(
+                        slot,
+                        [ManaOption::new(
+                            ManaPool([0, 2, 0, 0, 0, 0]),
+                            ResourceUse::Sacrifice,
+                        )],
+                    ));
+                    continue;
+                }
+                Some(_) | None => {}
+            }
             let Some(kind) = self.artifact_kind(slot) else {
                 continue;
             };
@@ -1120,7 +1171,9 @@ impl EngineOpeningModel {
             if state.flags & PRETURN_WINDOW != 0
                 && !matches!(
                     kind,
-                    OpeningSpellKind::VampiricTutor | OpeningSpellKind::EnlightenedTutor
+                    OpeningSpellKind::VampiricTutor
+                        | OpeningSpellKind::EnlightenedTutor
+                        | OpeningSpellKind::MysticalTutor
                 )
             {
                 continue;
@@ -1131,6 +1184,7 @@ impl EngineOpeningModel {
                 | OpeningSpellKind::VampiricTutor
                 | OpeningSpellKind::SchemingSymmetry => ([0, 1, 0, 0, 0, 0], false),
                 OpeningSpellKind::EnlightenedTutor => ([0, 0, 0, 0, 1, 0], false),
+                OpeningSpellKind::MysticalTutor => ([0, 0, 0, 1, 0, 0], false),
                 _ => continue,
             };
             let plans = compute_payment_plans(state.mana, &self.payment_sources(state), cost);
@@ -1138,6 +1192,34 @@ impl EngineOpeningModel {
                 if matches!(kind, OpeningSpellKind::EnlightenedTutor)
                     && !self.card_flags[target as usize].contains(CardFlags::ARTIFACT)
                     && !self.card_flags[target as usize].contains(CardFlags::ENCHANTMENT)
+                {
+                    continue;
+                }
+                if matches!(kind, OpeningSpellKind::MysticalTutor)
+                    && !matches!(
+                        self.card(target),
+                        Some(OpeningCard::Spell(
+                            OpeningSpellKind::DarkRitual
+                                | OpeningSpellKind::RiteOfFlame
+                                | OpeningSpellKind::DemonicTutor
+                                | OpeningSpellKind::ImperialSeal
+                                | OpeningSpellKind::VampiricTutor
+                                | OpeningSpellKind::EnlightenedTutor
+                                | OpeningSpellKind::SchemingSymmetry
+                                | OpeningSpellKind::Manamorphose
+                                | OpeningSpellKind::Gamble
+                                | OpeningSpellKind::NoxiousRevival
+                                | OpeningSpellKind::GreenSunsZenith
+                                | OpeningSpellKind::SummonersPact
+                                | OpeningSpellKind::CropRotation
+                                | OpeningSpellKind::CullingTheWeak
+                                | OpeningSpellKind::DiabolicIntent
+                                | OpeningSpellKind::InfernalPlunge
+                                | OpeningSpellKind::RainOfFilth
+                                | OpeningSpellKind::MysticalTutor
+                                | OpeningSpellKind::EldritchEvolution
+                        ))
+                    )
                 {
                     continue;
                 }
@@ -1474,12 +1556,24 @@ impl EngineOpeningModel {
                 permanent.with_tapped(stays_tapped).with_fresh(false),
             );
         }
-        !compute_payment_plans(
+        if !compute_payment_plans(
             upkeep.mana,
             &self.payment_sources(upkeep),
             [2, 0, 0, 0, 0, 2],
         )
         .is_empty()
+        {
+            return true;
+        }
+        self.angels_grace_slot.is_some_and(|grace| {
+            upkeep.hand.contains(grace)
+                && !compute_payment_plans(
+                    upkeep.mana,
+                    &self.payment_sources(upkeep),
+                    [0, 0, 0, 0, 1, 0],
+                )
+                .is_empty()
+        })
     }
 
     fn sacrifice_creature(&self, state: &mut PackedStateV2, source: PermanentSource) -> bool {
@@ -1627,6 +1721,180 @@ impl EngineOpeningModel {
         }
     }
 
+    fn generate_creature_casts(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        if state.flags & PRETURN_WINDOW != 0 {
+            return;
+        }
+        for slot in state.hand.iter() {
+            let costs: SmallVec<[Cost; 2]> = match self.creature_kind(slot) {
+                Some(OpeningCreatureKind::BirdsOfParadise)
+                | Some(OpeningCreatureKind::TinderWall) => {
+                    smallvec::smallvec![[0, 0, 0, 0, 0, 1]]
+                }
+                Some(OpeningCreatureKind::DeathriteShaman) => {
+                    smallvec::smallvec![[0, 1, 0, 0, 0, 0], [0, 0, 0, 0, 0, 1]]
+                }
+                Some(OpeningCreatureKind::Ragavan) => {
+                    smallvec::smallvec![[0, 0, 1, 0, 0, 0]]
+                }
+                _ => continue,
+            };
+            let sources = self.payment_sources(state);
+            for cost in costs {
+                for plan in compute_payment_plans(state.mana, &sources, cost) {
+                    let Some(mut next) = self.apply_payment_plan(state, plan) else {
+                        continue;
+                    };
+                    if next.move_card_to_battlefield(
+                        slot,
+                        Zone::Hand,
+                        PermanentInstance::new(PermanentSource::card(slot)).with_fresh(true),
+                    ) {
+                        out.push(InformationTransition::Deterministic(next));
+                    }
+                }
+            }
+        }
+    }
+
+    fn generate_eldritch_evolution(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        if state.flags & PRETURN_WINDOW != 0 {
+            return;
+        }
+        for evolution in state.hand.iter().filter(|slot| {
+            matches!(
+                self.spell_kind(*slot),
+                Some(OpeningSpellKind::EldritchEvolution)
+            )
+        }) {
+            let plans =
+                compute_payment_plans(state.mana, &self.payment_sources(state), [1, 0, 0, 0, 0, 2]);
+            for creature in self.creature_sources(state) {
+                for target in state.library.cards().iter().filter(|target| {
+                    matches!(self.card(*target), Some(OpeningCard::Engine { .. }))
+                        && self.card_colors[*target as usize] & (1 << 4) != 0
+                }) {
+                    for plan in &plans {
+                        let Some(mut next) = self.apply_payment_plan(state, *plan) else {
+                            continue;
+                        };
+                        if !self.sacrifice_creature(&mut next, creature)
+                            || !next.move_card(evolution, Zone::Hand, Zone::Exile)
+                            || !next.library.remove_known_or_unknown(target)
+                        {
+                            continue;
+                        }
+                        next.library.shuffle_all_unknown();
+                        if next
+                            .battlefield
+                            .insert(PermanentInstance::new(PermanentSource::card(target)))
+                        {
+                            out.push(InformationTransition::Deterministic(next));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn generate_deathrite_mana(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        let grave_lands: SmallVec<[SlotId; 8]> = state
+            .graveyard
+            .iter()
+            .filter(|slot| self.card_flags[*slot as usize].contains(CardFlags::LAND))
+            .collect();
+        for permanent in state.battlefield.as_slice() {
+            let Some(slot) = permanent.source().card_slot() else {
+                continue;
+            };
+            if permanent.tapped()
+                || permanent.fresh()
+                || !matches!(
+                    self.creature_kind(slot),
+                    Some(OpeningCreatureKind::DeathriteShaman)
+                )
+            {
+                continue;
+            }
+            if self.deathrite_external_land {
+                for produced in mana_options(0b1_1111, 0) {
+                    let mut next = state;
+                    next.mana = next.mana.add_capped(produced, 15);
+                    next.battlefield
+                        .replace(*permanent, permanent.with_tapped(true));
+                    out.push(InformationTransition::Deterministic(next));
+                }
+            }
+            for land in &grave_lands {
+                for produced in mana_options(0b1_1111, 0) {
+                    let mut next = state;
+                    next.mana = next.mana.add_capped(produced, 15);
+                    next.battlefield
+                        .replace(*permanent, permanent.with_tapped(true));
+                    if next.move_card(*land, Zone::Graveyard, Zone::Exile) {
+                        out.push(InformationTransition::Deterministic(next));
+                    }
+                }
+            }
+        }
+    }
+
+    fn generate_ragavan_attacks(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        for permanent in state.battlefield.as_slice() {
+            let Some(slot) = permanent.source().card_slot() else {
+                continue;
+            };
+            if permanent.tapped()
+                || permanent.fresh()
+                || !matches!(self.creature_kind(slot), Some(OpeningCreatureKind::Ragavan))
+            {
+                continue;
+            }
+            let mut next = state;
+            next.battlefield
+                .replace(*permanent, permanent.with_tapped(true));
+            if next.add_token(TokenKind::Treasure) {
+                out.push(InformationTransition::Deterministic(next));
+            }
+        }
+    }
+
+    fn generate_treasure_mana(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        if !state
+            .battlefield
+            .contains_source(PermanentSource::token(TokenKind::Treasure))
+        {
+            return;
+        }
+        for produced in mana_options(0b1_1111, 0) {
+            let mut next = state;
+            if next.remove_token(TokenKind::Treasure) {
+                next.mana = next.mana.add_capped(produced, 15);
+                out.push(InformationTransition::Deterministic(next));
+            }
+        }
+    }
+
     fn generate_end_turn(
         &self,
         state: PackedStateV2,
@@ -1673,6 +1941,23 @@ impl EngineOpeningModel {
                 if let Some(mut paid) = self.apply_payment_plan(next, plan) {
                     paid.flags &= !PACT_DUE;
                     out.push(InformationTransition::Deterministic(paid));
+                }
+            }
+            if let Some(grace) = self
+                .angels_grace_slot
+                .filter(|grace| next.hand.contains(*grace))
+            {
+                for plan in compute_payment_plans(
+                    next.mana,
+                    &self.payment_sources(next),
+                    [0, 0, 0, 0, 1, 0],
+                ) {
+                    if let Some(mut paid) = self.apply_payment_plan(next, plan) {
+                        if paid.move_card(grace, Zone::Hand, Zone::Graveyard) {
+                            paid.flags &= !PACT_DUE;
+                            out.push(InformationTransition::Deterministic(paid));
+                        }
+                    }
                 }
             }
             return;
@@ -1789,6 +2074,11 @@ impl InformationModel for EngineOpeningModel {
         self.generate_green_engine_tutors(state, out);
         self.generate_sacrifice_spells(state, out);
         self.generate_crop_rotation(state, out);
+        self.generate_creature_casts(state, out);
+        self.generate_eldritch_evolution(state, out);
+        self.generate_deathrite_mana(state, out);
+        self.generate_ragavan_attacks(state, out);
+        self.generate_treasure_mana(state, out);
         self.generate_demonic_led_tutors(state, out);
         self.generate_wishclaw_tutors(state, out);
         self.generate_manamorphose(state, out);
@@ -2628,6 +2918,152 @@ mod tests {
             transition,
             InformationTransition::Deterministic(next)
                 if next.commander.zone == CommanderZone::Command && next.hand.contains(2)
+        )));
+    }
+
+    #[test]
+    fn birds_waits_a_turn_while_tinder_wall_makes_mana_immediately() {
+        let model = model(&["Birds of Paradise", "Tinder Wall"]);
+        let birds_state = PackedStateV2 {
+            hand: [0].into_iter().collect(),
+            mana: ManaPool([0, 0, 0, 0, 1, 0]),
+            flags: TURN_DRAW_DONE,
+            ..PackedStateV2::default()
+        };
+        let mut out = SmallVec::new();
+        model.generate_creature_casts(birds_state, &mut out);
+        let InformationTransition::Deterministic(birds) = out[0] else {
+            panic!("Birds cast is deterministic");
+        };
+        assert!(model.payment_sources(birds).is_empty());
+        out.clear();
+        model.generate_end_turn(birds, &mut out);
+        let InformationTransition::Deterministic(ready_birds) = out[0] else {
+            panic!("end turn is deterministic");
+        };
+        assert_eq!(model.payment_sources(ready_birds)[0].options.len(), 5);
+
+        let tinder_state = PackedStateV2 {
+            hand: [1].into_iter().collect(),
+            mana: ManaPool([0, 0, 0, 0, 1, 0]),
+            ..PackedStateV2::default()
+        };
+        out.clear();
+        model.generate_creature_casts(tinder_state, &mut out);
+        let InformationTransition::Deterministic(tinder) = out[0] else {
+            panic!("Tinder cast is deterministic");
+        };
+        let source = &model.payment_sources(tinder)[0];
+        assert_eq!(source.options[0].mana, ManaPool([0, 2, 0, 0, 0, 0]));
+        assert_eq!(source.options[0].resource_use, ResourceUse::Sacrifice);
+    }
+
+    #[test]
+    fn deathrite_external_land_assumption_is_explicit() {
+        let enabled = model(&["Deathrite Shaman"]);
+        let mut state = PackedStateV2::default();
+        state
+            .battlefield
+            .insert(PermanentInstance::new(PermanentSource::card(0)));
+        let mut out = SmallVec::new();
+        enabled.generate_deathrite_mana(state, &mut out);
+        assert_eq!(out.len(), 5);
+
+        let disabled = model(&["Deathrite Shaman"]).with_deathrite_external_land(false);
+        out.clear();
+        disabled.generate_deathrite_mana(state, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn ragavan_connects_and_treasure_converts_to_any_color() {
+        let model = model(&["Ragavan, Nimble Pilferer"]);
+        let mut state = PackedStateV2::default();
+        state
+            .battlefield
+            .insert(PermanentInstance::new(PermanentSource::card(0)));
+        let mut out = SmallVec::new();
+        model.generate_ragavan_attacks(state, &mut out);
+        let InformationTransition::Deterministic(with_treasure) = out[0] else {
+            panic!("configured Ragavan connection is deterministic");
+        };
+        assert!(with_treasure
+            .battlefield
+            .contains_source(PermanentSource::token(TokenKind::Treasure)));
+        out.clear();
+        model.generate_treasure_mana(with_treasure, &mut out);
+        assert_eq!(out.len(), 5);
+        assert!(out.iter().all(|transition| matches!(
+            transition,
+            InformationTransition::Deterministic(next)
+                if !next.battlefield.contains_source(PermanentSource::token(TokenKind::Treasure))
+        )));
+    }
+
+    #[test]
+    fn mystical_tutor_only_stacks_modeled_instants_and_sorceries() {
+        let model = model(&[
+            "Mystical Tutor",
+            "Rhystic Study",
+            "Demonic Tutor",
+            "Elvish Spirit Guide",
+        ]);
+        let state = PackedStateV2 {
+            hand: [0].into_iter().collect(),
+            library: PackedLibrary::new([1, 2, 3].into_iter().collect()),
+            mana: ManaPool([0, 0, 1, 0, 0, 0]),
+            ..PackedStateV2::default()
+        };
+        let mut out = SmallVec::new();
+        model.generate_tutors(state, &mut out);
+        assert_eq!(out.len(), 1);
+        let InformationTransition::Deterministic(next) = out[0] else {
+            panic!("Mystical target is deterministic");
+        };
+        assert_eq!(next.library.chance_draws()[0].slot, 2);
+    }
+
+    #[test]
+    fn eldritch_evolution_turns_the_commander_into_heartwood() {
+        let model = model(&["Eldritch Evolution", "Heartwood Storyteller"]);
+        let mut state = PackedStateV2 {
+            hand: [0].into_iter().collect(),
+            library: PackedLibrary::new([1].into_iter().collect()),
+            mana: ManaPool([0, 0, 0, 0, 2, 1]),
+            ..PackedStateV2::default()
+        };
+        assert!(state.put_commander_on_battlefield(false, false));
+        let mut out = SmallVec::new();
+        model.generate_eldritch_evolution(state, &mut out);
+        let InformationTransition::Deterministic(next) = out[0] else {
+            panic!("Evolution target is deterministic");
+        };
+        assert_eq!(next.commander.zone, CommanderZone::Command);
+        assert!(next.exile.contains(0));
+        assert!(next.battlefield.contains_source(PermanentSource::card(1)));
+    }
+
+    #[test]
+    fn angels_grace_can_cover_an_unpayable_pact_trigger() {
+        let model = model(&["Angel's Grace", "Heartwood Storyteller", "Command Tower"]);
+        let mut state = PackedStateV2 {
+            hand: [0].into_iter().collect(),
+            flags: TURN_DRAW_DONE | PACT_DUE,
+            ..PackedStateV2::default()
+        };
+        state
+            .battlefield
+            .insert(PermanentInstance::new(PermanentSource::card(1)));
+        state
+            .battlefield
+            .insert(PermanentInstance::new(PermanentSource::card(2)));
+        assert_eq!(model.engine_value(state), Some(0.70));
+        let mut out = SmallVec::new();
+        model.generate_end_turn(state, &mut out);
+        assert!(out.iter().any(|transition| matches!(
+            transition,
+            InformationTransition::Deterministic(next)
+                if next.graveyard.contains(0) && next.flags & PACT_DUE == 0
         )));
     }
 }

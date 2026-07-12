@@ -11,15 +11,15 @@ The exact pre-fork baseline is commit `11104ea`, the clean snapshot used to init
 | Goal | Status | Remaining work |
 | --- | --- | --- |
 | Clean, reproducible engine fork | Complete | Keep source manifests and retained benchmark summaries current. |
-| Shared card registry | Partial | Flags, action templates, and payment gates drive production dispatch. Commander legality, tutor predicates, UI metadata, and generated semantic coverage are not yet owned by one registry. |
+| Shared card registry | Partial | Flags plus opening land, artifact, spell, and creature semantics drive the packed production path. Commander legality and UI metadata are not yet fully registry-owned. |
 | Fixed-size `PackedState` and `PackedLibrary` | Partial production | `PackedStateV2` owns the exact land and principal artifact opening slice. Unsupported spell families and the bulk CLI still require migration from `FastState`. |
 | Packed mana/payment closure | Partial production | Engine, artifacts, commander, equip, rituals, tutors, sacrifice spells, Rain, Crop, and Demonic-plus-LED apply directly to `PackedStateV2`; City floating is retained explicitly. Offer and creature-chain combinations remain. |
 | Information-state reference solver | Partial production | Lands, principal artifacts, deterministic tutors/rituals, Manamorphose, Gamble, Noxious, GSZ, Pact upkeep, Crop, Rain, Rhystic, and Heartwood use visible information and explicit chance. Mana creatures and creature-chain tutors remain. |
 | Compiled no-lookahead policy | Implemented for opening slice | The action policy sees only observable transitions and the mulligan policy sees only the visible hand. It must be recalibrated after remaining card slices land. |
-| Paired `BatchEvaluator` | Kernel complete | Common-random slot permutations, resumable ranges, progress, influence, compact discordances, paired SEs, McNemar tests, and latency quantiles are implemented. The full-deck CLI adapter remains. |
-| Multifidelity estimator | Pipeline complete | Seed-only independent correction selection now connects low and high evaluators. The full-deck CLI adapter remains. |
+| Paired `BatchEvaluator` | Production single-process | The `opening-batch-jsonl` adapter implements aligned variants, Commander mulligans, resumable ranges, influence, discordances, paired inference, and latency output. Parallelism remains shard-level. |
+| Multifidelity estimator | Production | The same adapter runs policy bulk samples and seed-only independent strict-reference corrections with uncertainty output. |
 | Performance gates | Partial | Opening direct/micro parity, counters, latency quantiles, and throughput are present. Allocation totals and 1/2/4/8/pod worker scaling remain. |
-| Publication estimand | Incomplete | The current fixed-library solver remains an oracle/policy approximation and can receive hidden library order. It is not the visible-information estimand required by the architecture. |
+| Publication estimand | Implemented for covered semantics | Packed batch decisions receive only visible hands/states and explicit chance outcomes. Unsupported early card lines must still be corrected or ported before a full-deck claim. |
 
 The practical result is a substantially better bridge engine, not a completed next-generation engine. Generations two through seven improved immutable library handling, registry dispatch, canonicalization, packed payment planning, tutors, and state deduplication while preserving a differential oracle.
 
