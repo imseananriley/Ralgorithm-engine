@@ -349,14 +349,23 @@ fn mcnemar_exact_p(candidate_only: u64, baseline_only: u64) -> f64 {
     }
     let tail = candidate_only.min(baseline_only);
     let n = discordant as f64;
-    let mut probability = 0.0;
+    let mut log_probability = -n * std::f64::consts::LN_2;
+    let mut log_tail = f64::NEG_INFINITY;
     for k in 0..=tail {
-        let log_choose = (1..=k)
-            .map(|index| ((discordant + 1 - index) as f64).ln() - (index as f64).ln())
-            .sum::<f64>();
-        probability += (log_choose - n * std::f64::consts::LN_2).exp();
+        log_tail = log_add_exp(log_tail, log_probability);
+        if k < tail {
+            log_probability += ((discordant - k) as f64).ln() - ((k + 1) as f64).ln();
+        }
     }
-    (2.0 * probability).min(1.0)
+    (log_tail + std::f64::consts::LN_2).exp().min(1.0)
+}
+
+fn log_add_exp(left: f64, right: f64) -> f64 {
+    if left.is_infinite() && left.is_sign_negative() {
+        return right;
+    }
+    let maximum = left.max(right);
+    maximum + ((left - maximum).exp() + (right - maximum).exp()).ln()
 }
 
 fn quantile(sorted: &[u64], probability: f64) -> u64 {

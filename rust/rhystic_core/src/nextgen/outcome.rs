@@ -120,6 +120,13 @@ where
         self.metrics.states_expanded += 1;
         let mut transitions = SmallVec::new();
         self.model.transitions(state, &mut transitions);
+        let generated = transitions.len();
+        let mut deterministic = FxHashSet::default();
+        transitions.retain(|transition| match transition {
+            InformationTransition::Deterministic(next) => deterministic.insert(*next),
+            InformationTransition::Chance(_) => true,
+        });
+        self.metrics.states_deduplicated += (generated - transitions.len()) as u64;
         self.metrics.strategic_actions_generated += transitions.len() as u64;
         let mut best = BoundedOutcome::default();
         for transition in transitions {
@@ -240,6 +247,13 @@ where
         self.metrics.states_expanded += 1;
         let mut transitions = SmallVec::new();
         self.model.transitions(state, &mut transitions);
+        let generated = transitions.len();
+        let mut deterministic = FxHashSet::default();
+        transitions.retain(|transition| match transition {
+            InformationTransition::Deterministic(next) => deterministic.insert(*next),
+            InformationTransition::Chance(_) => true,
+        });
+        self.metrics.states_deduplicated += (generated - transitions.len()) as u64;
         self.metrics.strategic_actions_generated += transitions.len() as u64;
         let bounded = self
             .policy

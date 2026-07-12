@@ -1,6 +1,7 @@
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use super::{
@@ -53,6 +54,8 @@ pub struct OpeningBatchRequest {
     pub commander_identity_mask: u8,
     #[serde(default = "default_true")]
     pub publication_mode: bool,
+    #[serde(default = "default_work_chunk_size")]
+    pub work_chunk_size: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -180,6 +183,9 @@ pub fn evaluate_opening_batch(
     if request.variants.is_empty() {
         return Err("opening batch requires at least one variant".to_string());
     }
+    if request.samples == 0 {
+        return Err("opening batch requires at least one sample".to_string());
+    }
     let expected_len = request.variants[0].deck.len();
     if request.fixture_mode && expected_len < 7 {
         return Err("opening batch decks require at least seven cards".to_string());
@@ -244,36 +250,43 @@ pub fn evaluate_opening_batch(
     };
     let workers = request.workers.max(1).min(request.samples.max(1) as usize);
     let started = Instant::now();
-    let outputs = std::thread::scope(|scope| {
+    let next_offset = AtomicU64::new(0);
+    let mut outputs = std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(workers);
-        let base = request.samples / workers as u64;
-        let remainder = request.samples % workers as u64;
-        let mut start = request.sample_start;
         let variants = &variants;
         let names = &names;
         let low_mulligans = &low_mulligans;
         let high_mulligans = &high_mulligans;
-        for worker in 0..workers {
-            let count = base + u64::from((worker as u64) < remainder);
-            let shard_start = start;
-            start += count;
+        for _ in 0..workers {
+            let next_offset = &next_offset;
             handles.push(scope.spawn(move || {
-                run_shard(
-                    request,
-                    variants,
-                    names,
-                    low_mulligans,
-                    high_mulligans,
-                    shard_start,
-                    count,
-                )
+                let mut worker_outputs = Vec::new();
+                loop {
+                    let offset =
+                        next_offset.fetch_add(request.work_chunk_size.max(1), Ordering::Relaxed);
+                    if offset >= request.samples {
+                        break;
+                    }
+                    let count = request.work_chunk_size.max(1).min(request.samples - offset);
+                    worker_outputs.push(run_shard(
+                        request,
+                        variants,
+                        names,
+                        low_mulligans,
+                        high_mulligans,
+                        request.sample_start + offset,
+                        count,
+                    ));
+                }
+                worker_outputs
             }));
         }
         handles
             .into_iter()
-            .map(|handle| handle.join().expect("opening batch worker panicked"))
+            .flat_map(|handle| handle.join().expect("opening batch worker panicked"))
             .collect::<Vec<_>>()
     });
+    outputs.sort_by_key(|(report, _, _, _)| report.sample_start);
     let mut reports = Vec::with_capacity(outputs.len());
     let mut multifidelity = vec![MultiFidelityAccumulator::default(); variants.len()];
     let mut paired_multifidelity = vec![MultiFidelityAccumulator::default(); variants.len()];
@@ -738,6 +751,10 @@ const fn default_true() -> bool {
     true
 }
 
+const fn default_work_chunk_size() -> u64 {
+    8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -779,6 +796,7 @@ mod tests {
             fixture_mode: true,
             commander_identity_mask: 0b1_1111,
             publication_mode: true,
+            work_chunk_size: 2,
         };
         let left = evaluate_opening_batch(&request).expect("batch");
         let right = evaluate_opening_batch(&request).expect("batch");
@@ -836,6 +854,7 @@ mod tests {
             fixture_mode: true,
             commander_identity_mask: 0b1_1111,
             publication_mode: true,
+            work_chunk_size: 2,
         };
         assert!(evaluate_opening_batch(&request).is_err());
     }
@@ -897,6 +916,7 @@ mod tests {
             fixture_mode: false,
             commander_identity_mask: 0b1_1111,
             publication_mode: true,
+            work_chunk_size: 1,
         };
         assert!(evaluate_opening_batch(&request)
             .expect_err("short production deck")
@@ -937,6 +957,7 @@ mod tests {
             fixture_mode: true,
             commander_identity_mask: 0b1_1111,
             publication_mode: true,
+            work_chunk_size: 1,
         };
         assert!(evaluate_opening_batch(&request)
             .expect_err("unsupported tutor")

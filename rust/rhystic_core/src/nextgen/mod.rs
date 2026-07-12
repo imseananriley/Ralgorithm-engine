@@ -751,10 +751,10 @@ mod tests {
     }
 
     #[test]
-    fn reference_solver_normalizes_chance_and_hits_transpositions() {
+    fn reference_solver_normalizes_chance_and_deduplicates_actions() {
         let result = ReferenceSolver::new(&AnalyticInformationModel).solve(0, 3);
         assert!((result.value - 0.25).abs() < f64::EPSILON);
-        assert!(result.metrics.transposition_hits >= 1);
+        assert_eq!(result.metrics.states_deduplicated, 1);
         assert_eq!(result.metrics.chance_nodes, 1);
     }
 
