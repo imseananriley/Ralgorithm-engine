@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use super::{
     CardMask, DeckSpec, EngineOpeningModel, OpeningExistenceDiscrepancySolver, OpeningOutcome,
     OpeningOutcomeDiscrepancySolver, OpeningOutcomeResult, OpeningWitnessTransition, PackedLibrary,
-    PackedStateV2, SearchMetrics, SlotId,
+    PackedStateV2, PermanentSource, SearchMetrics, SlotId, TokenKind,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,6 +64,7 @@ pub struct OpeningWitnessValidation {
     pub steps: usize,
     pub chance_product: f64,
     pub reason: Option<String>,
+    pub actions: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -282,12 +283,14 @@ fn validate_full_library_witness(
     game: &OpeningReplayGame,
     witness: &[OpeningWitnessTransition<PackedStateV2>],
 ) -> OpeningWitnessValidation {
+    let actions = describe_witness(deck, witness);
     if game.library_order.is_empty() || witness.is_empty() {
         return OpeningWitnessValidation {
             status: OpeningWitnessValidationStatus::Unavailable,
             steps: witness.len(),
             chance_product: 1.0,
             reason: Some("full library order or witness is unavailable".to_string()),
+            actions,
         };
     }
     let mut order = Vec::with_capacity(game.library_order.len());
@@ -298,6 +301,7 @@ fn validate_full_library_witness(
                 steps: witness.len(),
                 chance_product: 0.0,
                 reason: Some(format!("library order contains unknown card {name}")),
+                actions,
             };
         };
         order.push(slot);
@@ -328,6 +332,7 @@ fn validate_full_library_witness(
                             witness.len(),
                             chance_product,
                             format!("forced draw expected slot {expected}, witness chose {slot}"),
+                            actions.clone(),
                         );
                     }
                     remove_from_order(&mut order, slot);
@@ -344,6 +349,7 @@ fn validate_full_library_witness(
                             "recorded draw expected slot {:?}, witness chose {slot}",
                             order.first()
                         ),
+                        actions.clone(),
                     );
                 }
             } else {
@@ -396,6 +402,7 @@ fn validate_full_library_witness(
         chance_product,
         reason: stochastic
             .then(|| "witness consumes unresolved stochastic information".to_string()),
+        actions,
     }
 }
 
@@ -419,12 +426,144 @@ fn reconcile_library_delta(order: &mut Vec<SlotId>, removed: CardMask, added: Ca
     }
 }
 
-fn invalid_witness(steps: usize, chance_product: f64, reason: String) -> OpeningWitnessValidation {
+fn invalid_witness(
+    steps: usize,
+    chance_product: f64,
+    reason: String,
+    actions: Vec<String>,
+) -> OpeningWitnessValidation {
     OpeningWitnessValidation {
         status: OpeningWitnessValidationStatus::Invalid,
         steps,
         chance_product,
         reason: Some(reason),
+        actions,
+    }
+}
+
+fn describe_witness(
+    deck: &DeckSpec,
+    witness: &[OpeningWitnessTransition<PackedStateV2>],
+) -> Vec<String> {
+    witness
+        .iter()
+        .map(|step| describe_witness_step(deck, step))
+        .collect()
+}
+
+fn describe_witness_step(
+    deck: &DeckSpec,
+    step: &OpeningWitnessTransition<PackedStateV2>,
+) -> String {
+    let removed_library = step
+        .before
+        .library
+        .cards()
+        .difference(step.after.library.cards());
+    let added_hand = step.after.hand.difference(step.before.hand);
+    if step.is_chance {
+        if let Some(slot) = removed_library
+            .iter()
+            .find(|slot| added_hand.contains(*slot))
+        {
+            return format!(
+                "draw {} [p={:.6}]",
+                deck.card(slot).name,
+                step.chance_probability
+            );
+        }
+    }
+
+    let mut parts = Vec::new();
+    for slot in step.before.hand.difference(step.after.hand).iter() {
+        let destination = if step.after.graveyard.contains(slot) {
+            "to graveyard"
+        } else if step.after.exile.contains(slot) {
+            "to exile"
+        } else if battlefield_contains(step.after, PermanentSource::card(slot)) {
+            "to battlefield"
+        } else {
+            "from hand"
+        };
+        parts.push(format!("{} {destination}", deck.card(slot).name));
+    }
+    for slot in added_hand.iter() {
+        parts.push(format!("{} to hand", deck.card(slot).name));
+    }
+    let before_top = known_top_slot(step.before);
+    let after_top = known_top_slot(step.after);
+    if let Some(after_top) = after_top.filter(|top| Some(*top) != before_top) {
+        parts.push(format!("{} to library top", deck.card(after_top).name));
+    }
+
+    for source in battlefield_sources(step.after) {
+        if !battlefield_contains(step.before, source) {
+            parts.push(format!("{} enters battlefield", source_name(deck, source)));
+        }
+    }
+    for source in battlefield_sources(step.before) {
+        if !battlefield_contains(step.after, source) {
+            parts.push(format!("{} leaves battlefield", source_name(deck, source)));
+        } else if !source_tapped(step.before, source) && source_tapped(step.after, source) {
+            parts.push(format!("tap {}", source_name(deck, source)));
+        }
+    }
+    let before_turn = step.before.counters & 0xff;
+    let after_turn = step.after.counters & 0xff;
+    if before_turn != after_turn {
+        parts.push(format!("advance to turn {}", after_turn.max(1)));
+    }
+    if step.before.mana != step.after.mana {
+        parts.push(format!(
+            "mana {:?} -> {:?}",
+            step.before.mana.0, step.after.mana.0
+        ));
+    }
+    if step.is_chance {
+        parts.push(format!("chance p={:.6}", step.chance_probability));
+    }
+    if parts.is_empty() {
+        "pass/state transition".to_string()
+    } else {
+        parts.join("; ")
+    }
+}
+
+fn battlefield_sources(state: PackedStateV2) -> Vec<PermanentSource> {
+    state
+        .battlefield
+        .as_slice()
+        .iter()
+        .map(|permanent| permanent.source())
+        .collect()
+}
+
+fn battlefield_contains(state: PackedStateV2, source: PermanentSource) -> bool {
+    state.battlefield.contains_source(source)
+}
+
+fn source_tapped(state: PackedStateV2, source: PermanentSource) -> bool {
+    state
+        .battlefield
+        .as_slice()
+        .iter()
+        .find(|permanent| permanent.source() == source)
+        .is_some_and(|permanent| permanent.tapped())
+}
+
+fn source_name(deck: &DeckSpec, source: PermanentSource) -> String {
+    if let Some(slot) = source.card_slot() {
+        return deck.card(slot).name.to_string();
+    }
+    if source.is_commander() {
+        return "Nick Fury, Agent of S.H.I.E.L.D.".to_string();
+    }
+    match source.token_kind() {
+        Some(TokenKind::Treasure) => "Treasure".to_string(),
+        Some(TokenKind::GenericArtifact) => "Artifact token".to_string(),
+        Some(TokenKind::GenericCreature) => "Creature token".to_string(),
+        Some(TokenKind::Copy) => "Copy token".to_string(),
+        None => "Unknown permanent".to_string(),
     }
 }
 

@@ -2348,7 +2348,7 @@ fn generate_fast_commander_actions(
     }
     for mana in pay_options(state.mana(), [0, 0, 0, 0, 1, 0]) {
         let mut next = state.clone();
-        let nick = make_perm(ctx, FastPermKind::Nick, false, color_mask("W"), true, 0);
+        let nick = make_perm(ctx, FastPermKind::Nick, false, color_mask("WUBRG"), true, 0);
         next.push_perm(ctx, nick);
         next.set_mana(mana);
         actions.push(FastAction::new(
@@ -10353,6 +10353,32 @@ mod tests {
         let context = FastContext::with_card_names(&names);
         assert_eq!(context.card_count(), 140);
         assert_eq!(context.card_specs.len(), 140);
+    }
+
+    #[test]
+    fn nick_fury_enables_all_mox_amber_colors() {
+        let mut context = FastContext::with_card_names(["Mox Amber"]);
+        let mut state = FastState::from_fixture(&mut context, &fixture_state(Vec::new()));
+        let nick = make_perm(
+            &mut context,
+            FastPermKind::Nick,
+            false,
+            color_mask("WUBRG"),
+            false,
+            0,
+        );
+        let amber = make_perm(&mut context, FastPermKind::Amber, false, 0, false, 0);
+        state.push_perm(&context, nick);
+        state.push_perm(&context, amber);
+
+        let colors = fast_tap_options(&state, amber)
+            .into_iter()
+            .filter_map(|tap| match tap {
+                FastTap::Color(color) => Some(color),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(colors, vec![0, 1, 2, 3, 4]);
     }
 
     #[test]
