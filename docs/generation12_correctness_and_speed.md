@@ -22,7 +22,7 @@ Generation twelve replaces the provisional opening estimand with an auditable, n
 
 Production mode requires a 99-card singleton library and validates card color masks against the commander's identity. Candidate influence slots must exactly equal changed slots; baseline influence slots must equal their union. Results include model and request digests plus supported, inert, and unsupported-opening card manifests.
 
-`publication_mode=true` currently rejects the champion fixture because `An Offer You Can't Refuse` and `Ranger-Captain of Eos` have opening relevance but are not implemented in the packed model. This is intentional. Structural Commander validation does not replace an external, date-stamped banned-list oracle.
+`publication_mode=true` initially rejected the champion fixture because `An Offer You Can't Refuse` and `Ranger-Captain of Eos` had opening relevance but were not implemented. Generation thirteen ports those semantics and the fixture now passes with an empty unsupported-opening manifest. Structural Commander validation still does not replace an external, date-stamped banned-list oracle.
 
 ## Performance Changes
 
@@ -40,4 +40,4 @@ An eight-game, four-worker smoke with one bottom candidate and four pilot hands 
 
 ## Next Publication Gate
 
-Implement and differentially test Offer and Ranger-Captain, calibrate bottom-candidate bias with an independently selected exhaustive sample, increase depth until the weighted bound width is negligible, and run enough paired samples to meet a preregistered confidence-interval half-width.
+Calibrate bottom-candidate and compiled-policy bias with an independently selected exhaustive strict sample, then run paired deck variants to a preregistered confidence-interval half-width. See `docs/generation13_large_production_experiment.md` for the first 2,000-game production baseline.
