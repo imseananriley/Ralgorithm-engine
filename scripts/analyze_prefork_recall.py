@@ -57,7 +57,7 @@ def invoke(binary: Path, command: str, payload: Any, env: dict[str, str] | None 
     if len(lines) != 1:
         raise RuntimeError(f"expected one JSON response, received {len(lines)}")
     response = json.loads(lines[0])
-    if response.get("error"):
+    if isinstance(response, dict) and response.get("error"):
         raise RuntimeError(response["error"])
     return response
 
@@ -188,6 +188,40 @@ def main() -> int:
         "current D2 legacy misses",
     ) if d1_misses else []
     d2_by_index = {row["game_index"]: row for row in current_d2}
+    d2_misses = [
+        record
+        for record in d1_misses
+        if not positive(tier_by_budget(d2_by_index[record["game_index"]], 2))
+    ]
+    current_d3 = run_current_chunks(
+        current_bin,
+        request["deck"],
+        [replay_game(record) for record in d2_misses],
+        [3],
+        args.depth,
+        args.workers,
+        args.chunk_size,
+        args.action_candidates,
+        "current D3 legacy misses",
+    ) if d2_misses else []
+    d3_by_index = {row["game_index"]: row for row in current_d3}
+    d3_misses = [
+        record
+        for record in d2_misses
+        if not positive(tier_by_budget(d3_by_index[record["game_index"]], 3))
+    ]
+    current_d4 = run_current_chunks(
+        current_bin,
+        request["deck"],
+        [replay_game(record) for record in d3_misses],
+        [4],
+        args.depth,
+        args.workers,
+        args.chunk_size,
+        args.action_candidates,
+        "current D4 legacy misses",
+    ) if d3_misses else []
+    d4_by_index = {row["game_index"]: row for row in current_d4}
 
     strict_env = os.environ.copy()
     strict_env["RALGORITHM_STRICT_SHUFFLE_HIDDEN"] = "1"
@@ -208,6 +242,8 @@ def main() -> int:
         d01 = by_index[index]
         strict = strict_by_index.get(index)
         d2 = d2_by_index.get(index)
+        d3 = d3_by_index.get(index)
+        d4 = d4_by_index.get(index)
         merged.append(
             {
                 "game_index": index,
@@ -216,6 +252,8 @@ def main() -> int:
                 "current_d0": tier_by_budget(d01, 0),
                 "current_d1": tier_by_budget(d01, 1),
                 "current_d2": tier_by_budget(d2, 2) if d2 else None,
+                "current_d3": tier_by_budget(d3, 3) if d3 else None,
+                "current_d4": tier_by_budget(d4, 4) if d4 else None,
             }
         )
 
@@ -246,6 +284,16 @@ def main() -> int:
         for record in legal_d1_misses
         if not positive(tier_by_budget(d2_by_index[record["game_index"]], 2))
     ]
+    legal_d3_misses = [
+        record
+        for record in legal_d2_misses
+        if not positive(tier_by_budget(d3_by_index[record["game_index"]], 3))
+    ]
+    legal_d4_misses = [
+        record
+        for record in legal_d3_misses
+        if not positive(tier_by_budget(d4_by_index[record["game_index"]], 4))
+    ]
     current_only_d1 = [
         record
         for record in records
@@ -266,13 +314,19 @@ def main() -> int:
         "legacy_hits_recovered_d1": len(legacy_hits) - len(d1_misses),
         "legal_legacy_hits_missed_d1": len(legal_d1_misses),
         "legal_legacy_hits_missed_d2": len(legal_d2_misses),
+        "legal_legacy_hits_missed_d3": len(legal_d3_misses),
+        "legal_legacy_hits_missed_d4": len(legal_d4_misses),
         "current_d1_positive_legacy_misses": len(current_only_d1),
         "lookahead_game_indices": [record["game_index"] for record in lookahead],
         "strict_cap_game_indices": [record["game_index"] for record in strict_caps],
         "legal_d1_miss_game_indices": [record["game_index"] for record in legal_d1_misses],
         "legal_d2_miss_game_indices": [record["game_index"] for record in legal_d2_misses],
+        "legal_d3_miss_game_indices": [record["game_index"] for record in legal_d3_misses],
+        "legal_d4_miss_game_indices": [record["game_index"] for record in legal_d4_misses],
         "legal_d1_miss_hand_cards": top_cards(legal_d1_misses),
         "legal_d2_miss_hand_cards": top_cards(legal_d2_misses),
+        "legal_d3_miss_hand_cards": top_cards(legal_d3_misses),
+        "legal_d4_miss_hand_cards": top_cards(legal_d4_misses),
         "settings": {
             "seed": request["seed"],
             "depth": args.depth,

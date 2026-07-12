@@ -2485,6 +2485,27 @@ impl OpeningOutcomeModel for EngineOpeningModel {
             }
         }
     }
+
+    fn transition_family(
+        &self,
+        state: Self::State,
+        transition: &InformationTransition<Self::State>,
+    ) -> Option<u16> {
+        let next = match transition {
+            InformationTransition::Deterministic(next) => *next,
+            InformationTransition::Chance(outcomes) => outcomes.first()?.0,
+        };
+        state.hand.iter().find_map(|slot| {
+            let consumed = next.graveyard.contains(slot)
+                || next.exile.contains(slot)
+                || next
+                    .battlefield
+                    .as_slice()
+                    .iter()
+                    .any(|permanent| permanent.source().card_slot() == Some(slot));
+            consumed.then_some(u16::from(self.semantic_classes[slot as usize]) + 1)
+        })
+    }
 }
 
 fn land_semantics(profile: OpeningManaProfile) -> LandSemantics {

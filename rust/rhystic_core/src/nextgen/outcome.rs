@@ -35,6 +35,7 @@ mod tests {
             if state == 0 {
                 out.push(InformationTransition::Deterministic(1));
                 out.push(InformationTransition::Deterministic(2));
+                out.push(InformationTransition::Deterministic(3));
             }
         }
     }
@@ -56,6 +57,18 @@ mod tests {
             match transition {
                 InformationTransition::Deterministic(next) => i64::from(*next),
                 InformationTransition::Chance(_) => 0,
+            }
+        }
+
+        fn transition_family(
+            &self,
+            _state: Self::State,
+            transition: &InformationTransition<Self::State>,
+        ) -> Option<u16> {
+            match transition {
+                InformationTransition::Deterministic(2 | 3) => Some(7),
+                InformationTransition::Deterministic(1) => Some(8),
+                _ => None,
             }
         }
     }
@@ -97,6 +110,14 @@ pub trait OpeningOutcomeModel: InformationModel {
         _transition: &InformationTransition<Self::State>,
     ) -> i64 {
         0
+    }
+
+    fn transition_family(
+        &self,
+        _state: Self::State,
+        _transition: &InformationTransition<Self::State>,
+    ) -> Option<u16> {
+        None
     }
 }
 
@@ -210,7 +231,19 @@ where
         } else {
             self.action_candidate_limit
         };
-        for (rank, transition) in transitions.into_iter().take(searched).enumerate() {
+        let mut selected = SmallVec::<[InformationTransition<M::State>; 8]>::new();
+        let mut seen_families = FxHashSet::default();
+        for transition in transitions {
+            let family = self.model.transition_family(state, &transition);
+            if family.is_some_and(|family| !seen_families.insert(family)) {
+                continue;
+            }
+            selected.push(transition);
+            if selected.len() == searched {
+                break;
+            }
+        }
+        for (rank, transition) in selected.into_iter().enumerate() {
             let next_discrepancies = if rank == 0 {
                 discrepancies
             } else if discrepancies == 0 {

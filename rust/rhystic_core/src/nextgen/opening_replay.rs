@@ -260,4 +260,98 @@ mod tests {
         assert_eq!(response.games[0].tiers[0].outcome.rhystic_turn_1, 1.0);
         assert_eq!(response.games[0].tiers[1].outcome.rhystic_turn_1, 1.0);
     }
+
+    #[test]
+    fn discrepancy_escalation_preserves_deep_prefork_lines() {
+        let payload: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../fixtures/decks/champion_working_list.json"
+        ))
+        .expect("champion fixture JSON");
+        let deck = payload["deck"]
+            .as_array()
+            .expect("deck array")
+            .iter()
+            .map(|card| card.as_str().expect("card name").to_string())
+            .collect();
+        let games = vec![
+            OpeningReplayGame {
+                game_index: 779,
+                hand: [
+                    "City of Brass",
+                    "Crop Rotation",
+                    "Lion's Eye Diamond",
+                    "Lotho, Corrupt Shirriff",
+                    "Starting Town",
+                    "Summoner's Pact",
+                    "Wishclaw Talisman",
+                ]
+                .map(str::to_string)
+                .to_vec(),
+                bottomed: Vec::new(),
+                gemstone_caverns_live: false,
+                legacy_hit: true,
+                legacy_capped: false,
+                legacy_turn: Some(2),
+                legacy_engine_label: Some("Rhystic Study".to_string()),
+            },
+            OpeningReplayGame {
+                game_index: 283,
+                hand: [
+                    "Diabolic Intent",
+                    "Forbidden Orchard",
+                    "Lion's Eye Diamond",
+                    "Summoner's Pact",
+                    "Tropical Island",
+                ]
+                .map(str::to_string)
+                .to_vec(),
+                bottomed: ["Mental Misstep", "Noxious Revival"]
+                    .map(str::to_string)
+                    .to_vec(),
+                gemstone_caverns_live: false,
+                legacy_hit: true,
+                legacy_capped: false,
+                legacy_turn: Some(2),
+                legacy_engine_label: Some("Heartwood Storyteller".to_string()),
+            },
+            OpeningReplayGame {
+                game_index: 976,
+                hand: [
+                    "An Offer You Can't Refuse",
+                    "Lion's Eye Diamond",
+                    "Marsh Flats",
+                    "Mystical Tutor",
+                    "Summoner's Pact",
+                ]
+                .map(str::to_string)
+                .to_vec(),
+                bottomed: ["Force of Will", "Swan Song"].map(str::to_string).to_vec(),
+                gemstone_caverns_live: false,
+                legacy_hit: true,
+                legacy_capped: false,
+                legacy_turn: Some(2),
+                legacy_engine_label: Some("Rhystic Study".to_string()),
+            },
+        ];
+        let response = evaluate_opening_replay(&OpeningReplayRequest {
+            deck,
+            games,
+            max_turn: 2,
+            depth: 14,
+            discrepancy_budgets: vec![2, 3, 4],
+            action_candidate_limit: 2,
+            workers: 1,
+        })
+        .expect("deep recall replay");
+
+        for game in &response.games {
+            let first_positive = game
+                .tiers
+                .iter()
+                .find(|tier| tier.outcome.weighted_ev > 0.0)
+                .expect("legacy line recovered")
+                .discrepancy_budget;
+            assert_eq!(first_positive, if game.game_index == 976 { 4 } else { 3 });
+        }
+    }
 }
