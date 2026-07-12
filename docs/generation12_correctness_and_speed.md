@@ -36,7 +36,7 @@ On the same champion sample at depth 12, exhaustive low-fidelity bottoms took 8.
 
 Adding payment-plan reuse reduced the one-candidate calibration from 1.656 to 1.560 seconds (5.8%) with identical weighted output. The recorded search generated 35,243 strategic actions and removed only six duplicate deterministic actions, confirming that payment reuse and bottom screening matter more than action deduplication on this hand.
 
-An eight-game, four-worker smoke with one bottom candidate and four pilot hands completed in 5.01 measured seconds (1.60 games/s). Its model digest was `0a514687c538b28e88150d4d96c9bcc7`. The run is not inferential: only eight games were sampled and 62.5% had a nonzero depth interval at depth 12.
+An eight-game, four-worker smoke with one bottom candidate and four pilot hands completed in 5.01 measured seconds (1.60 games/s). The run is not inferential: only eight games were sampled and 62.5% had a nonzero depth interval at depth 12. Model digests now include the relevant engine source bytes as well as deck and configuration, so later semantic builds cannot reuse this smoke's pre-source-binding identifier.
 
 ## Next Publication Gate
 
