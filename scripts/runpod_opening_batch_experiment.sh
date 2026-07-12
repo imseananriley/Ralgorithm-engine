@@ -31,7 +31,7 @@ archive="$(mktemp /tmp/ralgorithm-opening.XXXXXX.tar.gz)"
 trap 'rm -rf "$tmpdir" "$archive"' EXIT
 mkdir -p "$tmpdir/rust" "$tmpdir/fixtures/decks"
 cp -R rust/rhystic_core "$tmpdir/rust/"
-cp rust/Cargo.toml rust/Cargo.lock "$tmpdir/rust/"
+cp Cargo.toml Cargo.lock "$tmpdir/"
 cp "$DECK_JSON" "$tmpdir/fixtures/decks/deck.json"
 COPYFILE_DISABLE=1 tar --no-xattrs -C "$tmpdir" -czf "$archive" .
 
@@ -50,7 +50,7 @@ ssh "${ssh_opts[@]}" "$RUNPOD_HOST" "
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
     export PATH=/root/.cargo/bin:\$PATH
   fi
-  cargo build --release --manifest-path rust/Cargo.toml
+  cargo build --release --manifest-path Cargo.toml
 "
 
 binary="$REMOTE_DIR/target/release/rhystic-core-smoke"
