@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import resource
 import subprocess
 import time
@@ -39,6 +40,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--rescue-initial-state-limit", type=int, default=20_000)
     parser.add_argument("--rescue-cap-state-limit", type=int, default=60_000)
+    parser.add_argument(
+        "--validate-witnesses",
+        action="store_true",
+        help="count packed hits only when their witness validates against full library order",
+    )
     return parser.parse_args()
 
 
@@ -52,7 +58,12 @@ def child_cpu_seconds() -> float:
     return usage.ru_utime + usage.ru_stime
 
 
-def invoke(binary: Path, command: str, payload: Any) -> tuple[Any, float, float]:
+def invoke(
+    binary: Path,
+    command: str,
+    payload: Any,
+    extra_env: dict[str, str] | None = None,
+) -> tuple[Any, float, float]:
     cpu_start = child_cpu_seconds()
     wall_start = time.perf_counter()
     completed = subprocess.run(
@@ -62,6 +73,7 @@ def invoke(binary: Path, command: str, payload: Any) -> tuple[Any, float, float]
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env={**os.environ, **(extra_env or {})},
         check=False,
     )
     wall = time.perf_counter() - wall_start
@@ -103,6 +115,7 @@ def replay_game(record: dict[str, Any], recorded_top: int) -> dict[str, Any]:
         "hand": record["keep"],
         "bottomed": record["bottomed"],
         "library_top": record["library"][:recorded_top],
+        "library_order": record["library"],
         "gemstone_caverns_live": record["gemstone_caverns_live"],
         "legacy_hit": record["hit"],
         "legacy_capped": record["capped"],
@@ -165,6 +178,8 @@ def main() -> int:
     tiers = []
     current_wall = 0.0
     current_cpu = 0.0
+    witness_status_by_game: dict[int, str] = {}
+    raw_packed_hits: set[int] = set()
     for budget in range(args.max_discrepancy + 1):
         if not unresolved:
             break
@@ -180,13 +195,24 @@ def main() -> int:
                 "action_candidate_limit": args.action_candidates,
                 "workers": min(args.workers, len(unresolved)),
                 "existence_only": True,
+                "validate_witnesses": args.validate_witnesses,
             },
         )
         current_wall += wall
         current_cpu += cpu
-        found = {
-            row["game_index"] for row in response["games"] if row["tiers"][0]["found"]
-        }
+        found = set()
+        for row in response["games"]:
+            tier = row["tiers"][0]
+            if not tier["found"]:
+                continue
+            raw_packed_hits.add(row["game_index"])
+            validation = tier.get("witness_validation")
+            status = validation["status"] if validation else "unavailable"
+            previous_status = witness_status_by_game.get(row["game_index"])
+            if previous_status != "confirmed" or status == "confirmed":
+                witness_status_by_game[row["game_index"]] = status
+            if not args.validate_witnesses or status == "confirmed":
+                found.add(row["game_index"])
         current_hits.update(found)
         unresolved = [record for record in unresolved if record["game_index"] not in found]
         recalled_old = len(current_hits & old_hits)
@@ -209,16 +235,27 @@ def main() -> int:
         )
 
     packed_hits = set(current_hits)
+    witness_statuses: dict[str, int] = {}
+    for status in witness_status_by_game.values():
+        witness_statuses[status] = witness_statuses.get(status, 0) + 1
     rescue = {
         "enabled": args.exact_rescue,
         "evaluated": 0,
         "initial_caps": 0,
+        "final_caps": 0,
+        "final_cap_game_indices": [],
+        "unsupported": 0,
         "hits": 0,
         "hit_game_indices": [],
         "wall_seconds": 0.0,
         "cpu_seconds": 0.0,
     }
     if args.exact_rescue and unresolved:
+        rescue_env = (
+            {"RHYSTIC_STRICT_SHUFFLE_HIDDEN": "1"}
+            if args.validate_witnesses
+            else None
+        )
         rescue["evaluated"] = len(unresolved)
         exact_initial, wall, cpu = invoke(
             current_bin,
@@ -227,6 +264,7 @@ def main() -> int:
                 old_request(record, args.rescue_initial_state_limit)
                 for record in unresolved
             ],
+            rescue_env,
         )
         rescue["wall_seconds"] += wall
         rescue["cpu_seconds"] += cpu
@@ -245,6 +283,7 @@ def main() -> int:
                     old_request(unresolved[index], args.rescue_cap_state_limit)
                     for index in capped_indices
                 ],
+                rescue_env,
             )
             rescue["wall_seconds"] += wall
             rescue["cpu_seconds"] += cpu
@@ -255,6 +294,18 @@ def main() -> int:
             for index, outcome in enumerate(exact_final)
             if outcome.get("turn") is not None
         }
+        rescue["final_caps"] = sum(
+            outcome.get("turn") is None and outcome.get("capped")
+            for outcome in exact_final
+        )
+        rescue["final_cap_game_indices"] = [
+            unresolved[index]["game_index"]
+            for index, outcome in enumerate(exact_final)
+            if outcome.get("turn") is None and outcome.get("capped")
+        ]
+        rescue["unsupported"] = sum(
+            outcome.get("unsupported", False) for outcome in exact_final
+        )
         current_hits.update(rescue_hits)
         rescue["hits"] = len(rescue_hits)
         rescue["hit_game_indices"] = sorted(rescue_hits)
@@ -288,6 +339,16 @@ def main() -> int:
             "hits": len(current_hits),
             "hit_game_indices": sorted(current_hits),
             "packed_hits": len(packed_hits),
+            "raw_packed_hits": len(raw_packed_hits),
+            "witness_statuses": witness_statuses,
+            "witness_status_game_indices": {
+                status: sorted(
+                    game_index
+                    for game_index, game_status in witness_status_by_game.items()
+                    if game_status == status
+                )
+                for status in sorted(witness_statuses)
+            },
             "rescue": rescue,
             "old_hits_recalled": len(current_hits & old_hits),
             "old_hits_missed": sorted(old_hits - current_hits),

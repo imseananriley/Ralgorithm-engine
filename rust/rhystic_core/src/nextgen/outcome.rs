@@ -143,16 +143,34 @@ pub struct OpeningOutcomeSolver<'a, M: OpeningOutcomeModel> {
     metrics: SearchMetrics,
 }
 
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub struct OpeningExistenceResult {
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct OpeningWitnessTransition<S> {
+    pub before: S,
+    pub after: S,
+    pub chance_probability: f64,
+    pub is_chance: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OpeningExistenceResult<S> {
     pub found: bool,
     pub metrics: SearchMetrics,
+    pub witness: Vec<OpeningWitnessTransition<S>>,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct OpeningWitnessChoice<S> {
+    after: S,
+    next_discrepancies: u8,
+    chance_probability: f64,
+    is_chance: bool,
 }
 
 pub struct OpeningExistenceDiscrepancySolver<'a, M: OpeningOutcomeModel> {
     model: &'a M,
     action_candidate_limit: usize,
     table: FxHashMap<(M::State, u8, u8), bool>,
+    choices: FxHashMap<(M::State, u8, u8), OpeningWitnessChoice<M::State>>,
     visiting: FxHashSet<(M::State, u8, u8)>,
     metrics: SearchMetrics,
 }
@@ -166,6 +184,7 @@ where
             model,
             action_candidate_limit: action_candidate_limit.max(1),
             table: FxHashMap::default(),
+            choices: FxHashMap::default(),
             visiting: FxHashSet::default(),
             metrics: SearchMetrics::default(),
         }
@@ -176,12 +195,42 @@ where
         state: M::State,
         depth: u8,
         discrepancy_budget: u8,
-    ) -> OpeningExistenceResult {
+    ) -> OpeningExistenceResult<M::State> {
         let found = self.value(state, depth, discrepancy_budget);
+        let witness = if found {
+            self.reconstruct_witness(state, depth, discrepancy_budget)
+        } else {
+            Vec::new()
+        };
         OpeningExistenceResult {
             found,
             metrics: self.metrics,
+            witness,
         }
+    }
+
+    fn reconstruct_witness(
+        &self,
+        mut state: M::State,
+        mut depth: u8,
+        mut discrepancies: u8,
+    ) -> Vec<OpeningWitnessTransition<M::State>> {
+        let mut witness = Vec::new();
+        while depth > 0 && self.model.terminal_opening_outcome(state).is_none() {
+            let Some(choice) = self.choices.get(&(state, depth, discrepancies)).copied() else {
+                break;
+            };
+            witness.push(OpeningWitnessTransition {
+                before: state,
+                after: choice.after,
+                chance_probability: choice.chance_probability,
+                is_chance: choice.is_chance,
+            });
+            state = choice.after;
+            discrepancies = choice.next_discrepancies;
+            depth -= 1;
+        }
+        witness
     }
 
     fn value(&mut self, state: M::State, depth: u8, discrepancies: u8) -> bool {
@@ -236,6 +285,7 @@ where
             }
         }
         let mut found = false;
+        let mut chosen = None;
         for (rank, transition) in selected.into_iter().enumerate() {
             let next_discrepancies = if rank == 0 {
                 discrepancies
@@ -246,13 +296,33 @@ where
             };
             found = match transition {
                 InformationTransition::Deterministic(next) => {
-                    self.value(next, depth - 1, next_discrepancies)
+                    let child_found = self.value(next, depth - 1, next_discrepancies);
+                    if child_found {
+                        chosen = Some(OpeningWitnessChoice {
+                            after: next,
+                            next_discrepancies,
+                            chance_probability: 1.0,
+                            is_chance: false,
+                        });
+                    }
+                    child_found
                 }
                 InformationTransition::Chance(outcomes) => {
                     self.metrics.chance_nodes += 1;
-                    outcomes.into_iter().any(|(next, probability)| {
-                        probability > 0.0 && self.value(next, depth - 1, next_discrepancies)
-                    })
+                    let mut child_found = false;
+                    for (next, probability) in outcomes {
+                        if probability > 0.0 && self.value(next, depth - 1, next_discrepancies) {
+                            chosen = Some(OpeningWitnessChoice {
+                                after: next,
+                                next_discrepancies,
+                                chance_probability: probability,
+                                is_chance: true,
+                            });
+                            child_found = true;
+                            break;
+                        }
+                    }
+                    child_found
                 }
             };
             if found {
@@ -260,6 +330,9 @@ where
             }
         }
         self.visiting.remove(&key);
+        if let Some(choice) = chosen {
+            self.choices.insert(key, choice);
+        }
         self.table.insert(key, found);
         found
     }

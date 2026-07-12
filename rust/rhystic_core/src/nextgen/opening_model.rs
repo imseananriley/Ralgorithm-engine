@@ -3695,6 +3695,7 @@ mod tests {
         let mut solver = OpeningExistenceDiscrepancySolver::new(&model, 128);
         let result = solver.solve(initial, 24, 20);
         assert!(result.found, "search metrics: {:?}", result.metrics);
+        assert!(!result.witness.is_empty());
     }
 
     #[test]

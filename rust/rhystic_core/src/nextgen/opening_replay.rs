@@ -4,8 +4,8 @@ use std::sync::Mutex;
 
 use super::{
     CardMask, DeckSpec, EngineOpeningModel, OpeningExistenceDiscrepancySolver, OpeningOutcome,
-    OpeningOutcomeDiscrepancySolver, OpeningOutcomeResult, PackedLibrary, PackedStateV2,
-    SearchMetrics,
+    OpeningOutcomeDiscrepancySolver, OpeningOutcomeResult, OpeningWitnessTransition, PackedLibrary,
+    PackedStateV2, SearchMetrics, SlotId,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -16,6 +16,8 @@ pub struct OpeningReplayGame {
     pub bottomed: Vec<String>,
     #[serde(default)]
     pub library_top: Vec<String>,
+    #[serde(default)]
+    pub library_order: Vec<String>,
     pub gemstone_caverns_live: bool,
     #[serde(default)]
     pub legacy_hit: bool,
@@ -43,12 +45,32 @@ pub struct OpeningReplayRequest {
     pub workers: usize,
     #[serde(default)]
     pub existence_only: bool,
+    #[serde(default)]
+    pub validate_witnesses: bool,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpeningWitnessValidationStatus {
+    Confirmed,
+    Probabilistic,
+    Invalid,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpeningWitnessValidation {
+    pub status: OpeningWitnessValidationStatus,
+    pub steps: usize,
+    pub chance_product: f64,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpeningReplayTierOutcome {
     pub discrepancy_budget: u8,
     pub found: bool,
+    pub witness_validation: Option<OpeningWitnessValidation>,
     pub outcome: OpeningOutcome,
     pub lower_bound: f64,
     pub upper_bound: f64,
@@ -105,6 +127,7 @@ pub fn evaluate_opening_replay(
                     &request.discrepancy_budgets,
                     request.action_candidate_limit,
                     request.existence_only,
+                    request.validate_witnesses,
                 ) {
                     Ok(outcome) => outcomes.lock().expect("replay outcomes lock").push(outcome),
                     Err(message) => {
@@ -131,6 +154,7 @@ fn evaluate_game(
     discrepancy_budgets: &[u8],
     action_candidate_limit: usize,
     existence_only: bool,
+    validate_witnesses: bool,
 ) -> Result<OpeningReplayGameOutcome, String> {
     let mut hand = CardMask::EMPTY;
     for name in &game.hand {
@@ -195,17 +219,23 @@ fn evaluate_game(
             let mut solver = OpeningExistenceDiscrepancySolver::new(model, action_candidate_limit);
             let mut found = false;
             let mut metrics = SearchMetrics::default();
+            let mut witness_validation = None;
             for pregame in &pregame_states {
                 let result = solver.solve(*pregame, depth, budget);
                 metrics = result.metrics;
                 if result.found {
                     found = true;
+                    if validate_witnesses {
+                        witness_validation =
+                            Some(validate_full_library_witness(deck, game, &result.witness));
+                    }
                     break;
                 }
             }
             tiers.push(OpeningReplayTierOutcome {
                 discrepancy_budget: budget,
                 found,
+                witness_validation,
                 outcome: OpeningOutcome::default(),
                 lower_bound: f64::from(found),
                 upper_bound: f64::from(found),
@@ -229,6 +259,7 @@ fn evaluate_game(
         tiers.push(OpeningReplayTierOutcome {
             discrepancy_budget: budget,
             found: best.outcome.weighted_ev > 0.0,
+            witness_validation: None,
             outcome: best.outcome,
             lower_bound: best.lower_bound,
             upper_bound: best.upper_bound,
@@ -244,6 +275,157 @@ fn evaluate_game(
         legacy_engine_label: game.legacy_engine_label.clone(),
         tiers,
     })
+}
+
+fn validate_full_library_witness(
+    deck: &DeckSpec,
+    game: &OpeningReplayGame,
+    witness: &[OpeningWitnessTransition<PackedStateV2>],
+) -> OpeningWitnessValidation {
+    if game.library_order.is_empty() || witness.is_empty() {
+        return OpeningWitnessValidation {
+            status: OpeningWitnessValidationStatus::Unavailable,
+            steps: witness.len(),
+            chance_product: 1.0,
+            reason: Some("full library order or witness is unavailable".to_string()),
+        };
+    }
+    let mut order = Vec::with_capacity(game.library_order.len());
+    for name in &game.library_order {
+        let Some(slot) = deck.slot(name) else {
+            return OpeningWitnessValidation {
+                status: OpeningWitnessValidationStatus::Invalid,
+                steps: witness.len(),
+                chance_product: 0.0,
+                reason: Some(format!("library order contains unknown card {name}")),
+            };
+        };
+        order.push(slot);
+    }
+
+    let mut randomized_tail = false;
+    let mut stochastic = false;
+    let mut uncertain_draws = Vec::<SlotId>::new();
+    let mut chance_product = 1.0;
+
+    for step in witness {
+        chance_product *= step.chance_probability;
+        let before_library = step.before.library.cards();
+        let after_library = step.after.library.cards();
+        let removed_library = before_library.difference(after_library);
+        let added_library = after_library.difference(before_library);
+        let added_hand = step.after.hand.difference(step.before.hand);
+
+        if step.is_chance {
+            let drawn = removed_library
+                .iter()
+                .find(|slot| added_hand.contains(*slot));
+            if let Some(slot) = drawn {
+                if step.before.library.known_top_len() > 0 {
+                    let expected = step.before.library.chance_draws()[0].slot;
+                    if slot != expected {
+                        return invalid_witness(
+                            witness.len(),
+                            chance_product,
+                            format!("forced draw expected slot {expected}, witness chose {slot}"),
+                        );
+                    }
+                    remove_from_order(&mut order, slot);
+                } else if randomized_tail {
+                    remove_from_order(&mut order, slot);
+                    uncertain_draws.push(slot);
+                } else if order.first().copied() == Some(slot) {
+                    order.remove(0);
+                } else {
+                    return invalid_witness(
+                        witness.len(),
+                        chance_product,
+                        format!(
+                            "recorded draw expected slot {:?}, witness chose {slot}",
+                            order.first()
+                        ),
+                    );
+                }
+            } else {
+                stochastic = true;
+                reconcile_library_delta(&mut order, removed_library, added_library);
+            }
+            continue;
+        }
+
+        let before_top = known_top_slot(step.before);
+        let after_top = known_top_slot(step.after);
+        let top_changed = after_top.is_some() && after_top != before_top;
+
+        for slot in removed_library.iter() {
+            remove_from_order(&mut order, slot);
+            randomized_tail = true;
+        }
+        for slot in added_library.iter() {
+            remove_from_order(&mut order, slot);
+            if after_top == Some(slot) && !before_library.contains(slot) {
+                order.insert(0, slot);
+            } else {
+                order.push(slot);
+                randomized_tail = true;
+            }
+        }
+        if top_changed {
+            let top = after_top.expect("checked known top");
+            let searched_from_library = before_library.contains(top);
+            remove_from_order(&mut order, top);
+            order.insert(0, top);
+            randomized_tail |= searched_from_library;
+        }
+    }
+
+    let final_hand = witness.last().expect("non-empty witness").after.hand;
+    if uncertain_draws
+        .iter()
+        .any(|slot| !final_hand.contains(*slot))
+    {
+        stochastic = true;
+    }
+    OpeningWitnessValidation {
+        status: if stochastic {
+            OpeningWitnessValidationStatus::Probabilistic
+        } else {
+            OpeningWitnessValidationStatus::Confirmed
+        },
+        steps: witness.len(),
+        chance_product,
+        reason: stochastic
+            .then(|| "witness consumes unresolved stochastic information".to_string()),
+    }
+}
+
+fn known_top_slot(state: PackedStateV2) -> Option<SlotId> {
+    (state.library.known_top_len() > 0).then(|| state.library.chance_draws()[0].slot)
+}
+
+fn remove_from_order(order: &mut Vec<SlotId>, slot: SlotId) {
+    if let Some(index) = order.iter().position(|candidate| *candidate == slot) {
+        order.remove(index);
+    }
+}
+
+fn reconcile_library_delta(order: &mut Vec<SlotId>, removed: CardMask, added: CardMask) {
+    for slot in removed.iter() {
+        remove_from_order(order, slot);
+    }
+    for slot in added.iter() {
+        remove_from_order(order, slot);
+        order.push(slot);
+    }
+}
+
+fn invalid_witness(steps: usize, chance_product: f64, reason: String) -> OpeningWitnessValidation {
+    OpeningWitnessValidation {
+        status: OpeningWitnessValidationStatus::Invalid,
+        steps,
+        chance_product,
+        reason: Some(reason),
+    }
 }
 
 const fn default_max_turn() -> u8 {
@@ -270,6 +452,165 @@ const fn default_workers() -> usize {
 mod tests {
     use super::*;
 
+    fn validation_fixture() -> (DeckSpec, OpeningReplayGame, SlotId, SlotId, SlotId) {
+        let names = ["Rhystic Study", "Blank A", "Blank B"];
+        let deck = DeckSpec::compile(&names.map(str::to_string)).expect("validator fixture");
+        let engine = deck.slot("Rhystic Study").unwrap();
+        let first = deck.slot("Blank A").unwrap();
+        let second = deck.slot("Blank B").unwrap();
+        let game = OpeningReplayGame {
+            game_index: 1,
+            hand: vec!["Rhystic Study".to_string()],
+            bottomed: Vec::new(),
+            library_top: Vec::new(),
+            library_order: ["Blank A", "Blank B"].map(str::to_string).to_vec(),
+            gemstone_caverns_live: false,
+            legacy_hit: false,
+            legacy_capped: false,
+            legacy_turn: None,
+            legacy_engine_label: None,
+        };
+        (deck, game, engine, first, second)
+    }
+
+    fn draw_witness(
+        first: SlotId,
+        second: SlotId,
+        chosen: SlotId,
+    ) -> OpeningWitnessTransition<PackedStateV2> {
+        let mut library_cards = CardMask::EMPTY;
+        library_cards.insert(first);
+        library_cards.insert(second);
+        let before = PackedStateV2 {
+            library: PackedLibrary::new(library_cards),
+            ..PackedStateV2::default()
+        };
+        let mut after = before;
+        assert!(after.draw(chosen));
+        OpeningWitnessTransition {
+            before,
+            after,
+            chance_probability: 0.5,
+            is_chance: true,
+        }
+    }
+
+    #[test]
+    fn full_library_witness_accepts_recorded_draw_and_rejects_mismatch() {
+        let (deck, game, _engine, first, second) = validation_fixture();
+        let confirmed =
+            validate_full_library_witness(&deck, &game, &[draw_witness(first, second, first)]);
+        assert_eq!(confirmed.status, OpeningWitnessValidationStatus::Confirmed);
+
+        let invalid =
+            validate_full_library_witness(&deck, &game, &[draw_witness(first, second, second)]);
+        assert_eq!(invalid.status, OpeningWitnessValidationStatus::Invalid);
+    }
+
+    #[test]
+    fn full_library_witness_marks_consumed_post_shuffle_draw_probabilistic() {
+        let (deck, game, _engine, first, second) = validation_fixture();
+        let mut cards = CardMask::EMPTY;
+        cards.insert(first);
+        cards.insert(second);
+        let before_search = PackedStateV2 {
+            library: PackedLibrary::new(cards),
+            ..PackedStateV2::default()
+        };
+        let mut after_search = before_search;
+        assert!(after_search.library.remove_known_or_unknown(second));
+        let search = OpeningWitnessTransition {
+            before: before_search,
+            after: after_search,
+            chance_probability: 1.0,
+            is_chance: false,
+        };
+        let mut after_draw = after_search;
+        assert!(after_draw.draw(first));
+        let draw = OpeningWitnessTransition {
+            before: after_search,
+            after: after_draw,
+            chance_probability: 1.0,
+            is_chance: true,
+        };
+        let mut after_use = after_draw;
+        assert!(after_use.move_card(
+            first,
+            crate::nextgen::Zone::Hand,
+            crate::nextgen::Zone::Graveyard
+        ));
+        let consume = OpeningWitnessTransition {
+            before: after_draw,
+            after: after_use,
+            chance_probability: 1.0,
+            is_chance: false,
+        };
+
+        let validation = validate_full_library_witness(&deck, &game, &[search, draw, consume]);
+        assert_eq!(
+            validation.status,
+            OpeningWitnessValidationStatus::Probabilistic
+        );
+    }
+
+    #[test]
+    fn full_library_witness_does_not_treat_known_top_recursion_as_shuffle() {
+        let (deck, mut game, _engine, first, second) = validation_fixture();
+        game.library_order = vec!["Blank A".to_string()];
+        let mut library = CardMask::EMPTY;
+        library.insert(first);
+        let before_revival = PackedStateV2 {
+            graveyard: [second].into_iter().collect(),
+            library: PackedLibrary::new(library),
+            ..PackedStateV2::default()
+        };
+        let mut after_revival = before_revival;
+        after_revival.graveyard.remove(second);
+        after_revival.library.insert_unknown(second);
+        after_revival.library.push_known_top(second);
+        let revival = OpeningWitnessTransition {
+            before: before_revival,
+            after: after_revival,
+            chance_probability: 1.0,
+            is_chance: false,
+        };
+        let mut after_forced_draw = after_revival;
+        assert!(after_forced_draw.draw(second));
+        let forced_draw = OpeningWitnessTransition {
+            before: after_revival,
+            after: after_forced_draw,
+            chance_probability: 1.0,
+            is_chance: true,
+        };
+        let mut after_recorded_draw = after_forced_draw;
+        assert!(after_recorded_draw.draw(first));
+        let recorded_draw = OpeningWitnessTransition {
+            before: after_forced_draw,
+            after: after_recorded_draw,
+            chance_probability: 1.0,
+            is_chance: true,
+        };
+        let mut terminal = after_recorded_draw;
+        assert!(terminal.move_card(
+            first,
+            crate::nextgen::Zone::Hand,
+            crate::nextgen::Zone::Graveyard
+        ));
+        let consume = OpeningWitnessTransition {
+            before: after_recorded_draw,
+            after: terminal,
+            chance_probability: 1.0,
+            is_chance: false,
+        };
+
+        let validation = validate_full_library_witness(
+            &deck,
+            &game,
+            &[revival, forced_draw, recorded_draw, consume],
+        );
+        assert_eq!(validation.status, OpeningWitnessValidationStatus::Confirmed);
+    }
+
     #[test]
     fn replay_evaluates_an_explicit_keep_without_library_order_lookahead() {
         let request = OpeningReplayRequest {
@@ -293,6 +634,7 @@ mod tests {
                     .map(str::to_string)
                     .to_vec(),
                 library_top: Vec::new(),
+                library_order: Vec::new(),
                 gemstone_caverns_live: false,
                 legacy_hit: true,
                 legacy_capped: false,
@@ -305,6 +647,7 @@ mod tests {
             action_candidate_limit: 2,
             workers: 1,
             existence_only: false,
+            validate_witnesses: false,
         };
 
         let response = evaluate_opening_replay(&request).expect("replay");
@@ -341,6 +684,7 @@ mod tests {
                 .to_vec(),
                 bottomed: Vec::new(),
                 library_top: Vec::new(),
+                library_order: Vec::new(),
                 gemstone_caverns_live: false,
                 legacy_hit: true,
                 legacy_capped: false,
@@ -362,6 +706,7 @@ mod tests {
                     .map(str::to_string)
                     .to_vec(),
                 library_top: Vec::new(),
+                library_order: Vec::new(),
                 gemstone_caverns_live: false,
                 legacy_hit: true,
                 legacy_capped: false,
@@ -381,6 +726,7 @@ mod tests {
                 .to_vec(),
                 bottomed: ["Force of Will", "Swan Song"].map(str::to_string).to_vec(),
                 library_top: Vec::new(),
+                library_order: Vec::new(),
                 gemstone_caverns_live: false,
                 legacy_hit: true,
                 legacy_capped: false,
@@ -397,6 +743,7 @@ mod tests {
             action_candidate_limit: 4,
             workers: 1,
             existence_only: false,
+            validate_witnesses: false,
         })
         .expect("deep recall replay");
 

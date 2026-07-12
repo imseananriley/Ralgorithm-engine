@@ -52,12 +52,14 @@ pub use opening_batch::{
 pub use opening_model::{EngineOpeningModel, OpeningMulliganPolicy, VisibleOpeningPolicy};
 pub use opening_replay::{
     evaluate_opening_replay, OpeningReplayGame, OpeningReplayGameOutcome, OpeningReplayRequest,
-    OpeningReplayResponse, OpeningReplayTierOutcome,
+    OpeningReplayResponse, OpeningReplayTierOutcome, OpeningWitnessValidation,
+    OpeningWitnessValidationStatus,
 };
 pub use outcome::{
     evaluate_opening_outcome_policy, OpeningExistenceDiscrepancySolver, OpeningExistenceResult,
     OpeningOutcome, OpeningOutcomeDiscrepancySolver, OpeningOutcomeModel,
     OpeningOutcomePolicySolver, OpeningOutcomeResult, OpeningOutcomeSolver,
+    OpeningWitnessTransition,
 };
 pub use policy::{evaluate_compiled_policy, CompiledPolicy, PolicyResult};
 pub use reference_solver::{
