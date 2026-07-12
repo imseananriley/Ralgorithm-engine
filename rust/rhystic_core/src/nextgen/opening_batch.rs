@@ -2,10 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 use super::{
-    evaluate_compiled_policy, independent_sample_selected, merge_batch_reports, slot_permutation,
-    BatchConfig, BatchEvaluation, BatchEvaluator, BatchReport, CardMask, DeckSpec,
-    EngineOpeningModel, Estimate, MultiFidelityAccumulator, OpeningMulliganPolicy, PackedLibrary,
-    PackedStateV2, ReferenceSolver, VisibleOpeningPolicy,
+    evaluate_opening_outcome_policy, independent_sample_selected, merge_batch_reports,
+    slot_permutation, BatchConfig, BatchEvaluation, BatchEvaluator, BatchReport, CardMask,
+    DeckSpec, EngineOpeningModel, Estimate, MultiFidelityAccumulator, OpeningMulliganPolicy,
+    OpeningOutcome, OpeningOutcomeSolver, PackedLibrary, PackedStateV2, VisibleOpeningPolicy,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -51,6 +51,72 @@ pub struct OpeningBatchResponse {
     pub mulligan_policy: String,
     pub report: BatchReport,
     pub multifidelity: Vec<Option<Estimate>>,
+    pub outcomes: Vec<OpeningOutcomeSummary>,
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct OpeningOutcomeAccumulator {
+    pub samples: u64,
+    pub weighted_ev_sum: f64,
+    pub rhystic_turn_1_sum: f64,
+    pub rhystic_turn_2_sum: f64,
+    pub heartwood_turn_1_sum: f64,
+    pub heartwood_turn_2_sum: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpeningOutcomeSummary {
+    pub name: String,
+    pub samples: u64,
+    pub weighted_ev: f64,
+    pub rhystic_turn_1: f64,
+    pub rhystic_by_turn_2: f64,
+    pub heartwood_turn_1: f64,
+    pub heartwood_by_turn_2: f64,
+    pub any_engine_by_turn_1: f64,
+    pub any_engine_by_turn_2: f64,
+}
+
+impl OpeningOutcomeAccumulator {
+    fn push(&mut self, outcome: OpeningOutcome) {
+        self.samples += 1;
+        self.weighted_ev_sum += outcome.weighted_ev;
+        self.rhystic_turn_1_sum += outcome.rhystic_turn_1;
+        self.rhystic_turn_2_sum += outcome.rhystic_turn_2;
+        self.heartwood_turn_1_sum += outcome.heartwood_turn_1;
+        self.heartwood_turn_2_sum += outcome.heartwood_turn_2;
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.samples += other.samples;
+        self.weighted_ev_sum += other.weighted_ev_sum;
+        self.rhystic_turn_1_sum += other.rhystic_turn_1_sum;
+        self.rhystic_turn_2_sum += other.rhystic_turn_2_sum;
+        self.heartwood_turn_1_sum += other.heartwood_turn_1_sum;
+        self.heartwood_turn_2_sum += other.heartwood_turn_2_sum;
+    }
+
+    fn summarize(self, name: String) -> OpeningOutcomeSummary {
+        let n = self.samples.max(1) as f64;
+        let rhystic_turn_1 = self.rhystic_turn_1_sum / n;
+        let rhystic_turn_2 = self.rhystic_turn_2_sum / n;
+        let heartwood_turn_1 = self.heartwood_turn_1_sum / n;
+        let heartwood_turn_2 = self.heartwood_turn_2_sum / n;
+        OpeningOutcomeSummary {
+            name,
+            samples: self.samples,
+            weighted_ev: self.weighted_ev_sum / n,
+            rhystic_turn_1,
+            rhystic_by_turn_2: rhystic_turn_1 + rhystic_turn_2,
+            heartwood_turn_1,
+            heartwood_by_turn_2: heartwood_turn_1 + heartwood_turn_2,
+            any_engine_by_turn_1: rhystic_turn_1 + heartwood_turn_1,
+            any_engine_by_turn_2: rhystic_turn_1
+                + rhystic_turn_2
+                + heartwood_turn_1
+                + heartwood_turn_2,
+        }
+    }
 }
 
 struct CompiledVariant {
@@ -59,6 +125,12 @@ struct CompiledVariant {
     deck_mask: CardMask,
     deck_len: usize,
     influence: CardMask,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct OpeningGameEvaluation {
+    outcome: OpeningOutcome,
+    influenced: bool,
 }
 
 pub fn evaluate_opening_batch(
@@ -116,9 +188,13 @@ pub fn evaluate_opening_batch(
     });
     let mut reports = Vec::with_capacity(outputs.len());
     let mut multifidelity = vec![MultiFidelityAccumulator::default(); variants.len()];
-    for (report, shard_multifidelity) in outputs {
+    let mut outcomes = vec![OpeningOutcomeAccumulator::default(); variants.len()];
+    for (report, shard_multifidelity, shard_outcomes) in outputs {
         reports.push(report);
         for (total, shard) in multifidelity.iter_mut().zip(shard_multifidelity) {
+            total.merge(shard);
+        }
+        for (total, shard) in outcomes.iter_mut().zip(shard_outcomes) {
             total.merge(shard);
         }
     }
@@ -144,6 +220,11 @@ pub fn evaluate_opening_batch(
             .into_iter()
             .map(MultiFidelityAccumulator::estimate)
             .collect(),
+        outcomes: outcomes
+            .into_iter()
+            .zip(names)
+            .map(|(accumulator, name)| accumulator.summarize(name))
+            .collect(),
     })
 }
 
@@ -153,7 +234,11 @@ fn run_shard(
     names: &[String],
     sample_start: u64,
     samples: u64,
-) -> (BatchReport, Vec<MultiFidelityAccumulator>) {
+) -> (
+    BatchReport,
+    Vec<MultiFidelityAccumulator>,
+    Vec<OpeningOutcomeAccumulator>,
+) {
     let batch = BatchEvaluator::new(BatchConfig {
         root_seed: request.seed,
         sample_start,
@@ -164,6 +249,7 @@ fn run_shard(
     });
     let mulligan = OpeningMulliganPolicy::default();
     let mut multifidelity = vec![MultiFidelityAccumulator::default(); variants.len()];
+    let mut outcomes = vec![OpeningOutcomeAccumulator::default(); variants.len()];
     let report = batch.run(names, |sample_index, sample_seed, variant_index| {
         let low = evaluate_game(
             &variants[variant_index],
@@ -173,7 +259,8 @@ fn run_shard(
             request.strict_reference,
             mulligan,
         );
-        multifidelity[variant_index].push_low(low.value);
+        outcomes[variant_index].push(low.outcome);
+        multifidelity[variant_index].push_low(low.outcome.weighted_ev);
         if !request.strict_reference
             && independent_sample_selected(
                 request.seed,
@@ -190,11 +277,15 @@ fn run_shard(
                 true,
                 mulligan,
             );
-            multifidelity[variant_index].push_correction(low.value, high.value);
+            multifidelity[variant_index]
+                .push_correction(low.outcome.weighted_ev, high.outcome.weighted_ev);
         }
-        low
+        BatchEvaluation {
+            value: low.outcome.weighted_ev,
+            influenced: low.influenced,
+        }
     });
-    (report, multifidelity)
+    (report, multifidelity, outcomes)
 }
 
 fn evaluate_game(
@@ -204,7 +295,7 @@ fn evaluate_game(
     depth: u8,
     strict_reference: bool,
     mulligan: OpeningMulliganPolicy,
-) -> BatchEvaluation {
+) -> OpeningGameEvaluation {
     let model = if strict_reference {
         &variant.reference_model
     } else {
@@ -248,19 +339,28 @@ fn evaluate_game(
             library,
             ..PackedStateV2::default()
         };
-        let value = model
+        let outcome = model
             .pregame_states(state, gemstone_live)
             .into_iter()
             .map(|start| {
                 if strict_reference {
-                    ReferenceSolver::new(model).solve(start, depth).value
+                    OpeningOutcomeSolver::new(model).solve(start, depth).outcome
                 } else {
-                    evaluate_compiled_policy(model, &VisibleOpeningPolicy::new(model), start, depth)
-                        .value
+                    evaluate_opening_outcome_policy(
+                        model,
+                        &VisibleOpeningPolicy::new(model),
+                        start,
+                        depth,
+                    )
+                    .outcome
                 }
             })
-            .fold(0.0, f64::max);
-        return BatchEvaluation { value, influenced };
+            .max_by(|left, right| left.weighted_ev.total_cmp(&right.weighted_ev))
+            .unwrap_or_default();
+        return OpeningGameEvaluation {
+            outcome,
+            influenced,
+        };
     }
     unreachable!("the mulligan floor always keeps the final hand")
 }

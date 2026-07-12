@@ -10,6 +10,7 @@ mod metrics;
 mod multifidelity;
 mod opening_batch;
 mod opening_model;
+mod outcome;
 mod policy;
 mod reference_solver;
 mod resource_transition;
@@ -44,9 +45,14 @@ pub use multifidelity::{
     MultiFidelityReport,
 };
 pub use opening_batch::{
-    evaluate_opening_batch, OpeningBatchRequest, OpeningBatchResponse, OpeningVariantSpec,
+    evaluate_opening_batch, OpeningBatchRequest, OpeningBatchResponse, OpeningOutcomeAccumulator,
+    OpeningOutcomeSummary, OpeningVariantSpec,
 };
 pub use opening_model::{EngineOpeningModel, OpeningMulliganPolicy, VisibleOpeningPolicy};
+pub use outcome::{
+    evaluate_opening_outcome_policy, OpeningOutcome, OpeningOutcomeModel, OpeningOutcomeResult,
+    OpeningOutcomeSolver,
+};
 pub use policy::{evaluate_compiled_policy, CompiledPolicy, PolicyResult};
 pub use reference_solver::{
     InformationModel, InformationTransition, ReferenceResult, ReferenceSolver,

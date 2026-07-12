@@ -12,6 +12,8 @@ pub struct SearchMetrics {
     pub chance_nodes: u64,
     pub terminal_successes: u64,
     pub terminal_failures: u64,
+    pub depth_cutoffs: u64,
+    pub cycle_cutoffs: u64,
 }
 
 impl SearchMetrics {
@@ -26,5 +28,7 @@ impl SearchMetrics {
         self.chance_nodes += other.chance_nodes;
         self.terminal_successes += other.terminal_successes;
         self.terminal_failures += other.terminal_failures;
+        self.depth_cutoffs += other.depth_cutoffs;
+        self.cycle_cutoffs += other.cycle_cutoffs;
     }
 }

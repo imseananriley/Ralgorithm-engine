@@ -61,6 +61,7 @@ where
             return value;
         }
         if depth == 0 {
+            self.metrics.depth_cutoffs += 1;
             return 0.0;
         }
         let key = (state, depth);

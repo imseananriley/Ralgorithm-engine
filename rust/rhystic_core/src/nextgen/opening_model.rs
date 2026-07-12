@@ -3,8 +3,9 @@ use smallvec::SmallVec;
 use super::{
     compute_payment_plans, CardFlags, CardMask, CommanderZone, CompiledPolicy, DeckSpec,
     InformationModel, InformationTransition, ManaOption, ManaPool, ManaSource, OpeningArtifactKind,
-    OpeningCreatureKind, OpeningLandKind, OpeningManaProfile, OpeningSpellKind, PackedStateV2,
-    PermanentInstance, PermanentSource, ResourceUse, SlotId, TokenKind, Zone,
+    OpeningCreatureKind, OpeningLandKind, OpeningManaProfile, OpeningOutcome, OpeningOutcomeModel,
+    OpeningSpellKind, PackedStateV2, PermanentInstance, PermanentSource, ResourceUse, SlotId,
+    TokenKind, Zone,
 };
 use crate::{pay_options, Cost};
 
@@ -27,7 +28,17 @@ enum OpeningCard {
     Artifact(OpeningArtifactKind),
     Spell(OpeningSpellKind),
     Creature(OpeningCreatureKind),
-    Engine { cost: Cost, values: [f64; 2] },
+    Engine {
+        kind: OpeningEngineKind,
+        cost: Cost,
+        values: [f64; 2],
+    },
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum OpeningEngineKind {
+    RhysticStudy,
+    HeartwoodStoryteller,
 }
 
 #[derive(Debug, Clone)]
@@ -92,10 +103,12 @@ impl EngineOpeningModel {
             }
             let compiled = match card.name.as_ref() {
                 "Rhystic Study" => OpeningCard::Engine {
+                    kind: OpeningEngineKind::RhysticStudy,
                     cost: [2, 0, 0, 1, 0, 0],
                     values: [1.0, 0.75],
                 },
                 "Heartwood Storyteller" => OpeningCard::Engine {
+                    kind: OpeningEngineKind::HeartwoodStoryteller,
                     cost: [1, 0, 0, 0, 0, 2],
                     values: [0.70, 0.55],
                 },
@@ -288,6 +301,39 @@ impl EngineOpeningModel {
         } else {
             value
         }
+    }
+
+    fn opening_outcome(&self, state: PackedStateV2) -> Option<OpeningOutcome> {
+        if state.flags & PACT_DUE != 0 && !self.can_pay_pact_next_upkeep(state) {
+            return None;
+        }
+        let turn = Self::turn(state).min(2);
+        state
+            .battlefield
+            .as_slice()
+            .iter()
+            .filter_map(|permanent| permanent.source().card_slot())
+            .filter_map(|slot| match self.card(slot) {
+                Some(OpeningCard::Engine { kind, values, .. }) => {
+                    let mut outcome = OpeningOutcome {
+                        weighted_ev: values[usize::from(turn - 1)],
+                        ..OpeningOutcome::default()
+                    };
+                    match (*kind, turn) {
+                        (OpeningEngineKind::RhysticStudy, 1) => outcome.rhystic_turn_1 = 1.0,
+                        (OpeningEngineKind::RhysticStudy, _) => outcome.rhystic_turn_2 = 1.0,
+                        (OpeningEngineKind::HeartwoodStoryteller, 1) => {
+                            outcome.heartwood_turn_1 = 1.0;
+                        }
+                        (OpeningEngineKind::HeartwoodStoryteller, _) => {
+                            outcome.heartwood_turn_2 = 1.0;
+                        }
+                    }
+                    Some(outcome)
+                }
+                _ => None,
+            })
+            .max_by(|left, right| left.weighted_ev.total_cmp(&right.weighted_ev))
     }
 
     fn visible_policy_score(&self, state: PackedStateV2) -> i64 {
@@ -2226,6 +2272,12 @@ impl InformationModel for EngineOpeningModel {
     }
 }
 
+impl OpeningOutcomeModel for EngineOpeningModel {
+    fn terminal_opening_outcome(&self, state: Self::State) -> Option<OpeningOutcome> {
+        self.opening_outcome(state)
+    }
+}
+
 fn land_semantics(profile: OpeningManaProfile) -> LandSemantics {
     LandSemantics {
         mana: mana_options(profile.color_mask, profile.colorless),
@@ -2402,6 +2454,31 @@ mod tests {
             model.generate_mana_activations(*start, &mut out);
             assert_eq!(out.len(), 5);
         }
+    }
+
+    #[test]
+    fn opening_outcome_preserves_engine_identity_and_resolution_turn() {
+        let model = model(&["Rhystic Study", "Heartwood Storyteller"]);
+        let mut rhystic = PackedStateV2::default();
+        rhystic
+            .battlefield
+            .insert(PermanentInstance::new(PermanentSource::card(0)));
+        let turn_one = model.opening_outcome(rhystic).expect("terminal Rhystic");
+        assert_eq!(turn_one.weighted_ev, 1.0);
+        assert_eq!(turn_one.rhystic_turn_1, 1.0);
+        assert_eq!(turn_one.any_engine(), 1.0);
+
+        let mut heartwood = PackedStateV2::default();
+        EngineOpeningModel::set_turn(&mut heartwood, 2);
+        heartwood
+            .battlefield
+            .insert(PermanentInstance::new(PermanentSource::card(1)));
+        let turn_two = model
+            .opening_outcome(heartwood)
+            .expect("terminal Heartwood");
+        assert_eq!(turn_two.weighted_ev, 0.55);
+        assert_eq!(turn_two.heartwood_turn_2, 1.0);
+        assert_eq!(turn_two.any_engine(), 1.0);
     }
 
     #[test]
