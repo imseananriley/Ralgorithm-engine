@@ -17,6 +17,10 @@ WORKERS="${WORKERS:-32}"
 BOTTOM_CANDIDATES="${BOTTOM_CANDIDATES:-1}"
 DISCREPANCY_BUDGET="${DISCREPANCY_BUDGET:-1}"
 ACTION_CANDIDATES="${ACTION_CANDIDATES:-2}"
+CORRECTION_DISCREPANCY_BUDGET="${CORRECTION_DISCREPANCY_BUDGET:-2}"
+CORRECTION_NUMERATOR="${CORRECTION_NUMERATOR:-1}"
+CORRECTION_DENOMINATOR="${CORRECTION_DENOMINATOR:-10}"
+CORRECTION_PILOT_SAMPLES="${CORRECTION_PILOT_SAMPLES:-8}"
 
 if [[ -z "$RUNPOD_HOST" || -z "$RUNPOD_PORT" ]]; then
   echo "RUNPOD_HOST and RUNPOD_PORT are required" >&2
@@ -59,7 +63,7 @@ ssh "${ssh_opts[@]}" "$RUNPOD_HOST" "
 binary="$REMOTE_DIR/target/release/rhystic-core-smoke"
 calibration="$OUT_DIR/mulligan_calibration.json"
 if [[ ! -s "$calibration" ]]; then
-  python3 - "$DECK_JSON" "$SEED" "$DEPTH" "$PILOT_SAMPLES" "$WORKERS" "$BOTTOM_CANDIDATES" "$DISCREPANCY_BUDGET" "$ACTION_CANDIDATES" > "$OUT_DIR/calibration_request.json" <<'PY'
+  python3 - "$DECK_JSON" "$SEED" "$DEPTH" "$PILOT_SAMPLES" "$WORKERS" "$BOTTOM_CANDIDATES" "$DISCREPANCY_BUDGET" "$ACTION_CANDIDATES" "$CORRECTION_DISCREPANCY_BUDGET" "$CORRECTION_PILOT_SAMPLES" > "$OUT_DIR/calibration_request.json" <<'PY'
 import json, sys
 deck = json.load(open(sys.argv[1]))["deck"]
 print(json.dumps({
@@ -67,14 +71,16 @@ print(json.dumps({
     "seed": int(sys.argv[2]), "sample_start": 0, "samples": 1,
     "max_turn": 2, "depth": int(sys.argv[3]), "strict_reference": False,
     "discordance_limit": 10, "progress_interval": 1,
-    "correction_numerator": 0, "correction_denominator": 1,
+    "correction_numerator": 1, "correction_denominator": 1,
     "workers": int(sys.argv[5]), "exact_slot_draws": False,
-    "mulligan_pilot_samples": int(sys.argv[4]), "strict_mulligan_pilot_samples": 1,
+    "mulligan_pilot_samples": int(sys.argv[4]),
+    "strict_mulligan_pilot_samples": int(sys.argv[10]),
     "fixture_mode": False, "commander_identity_mask": 31,
     "publication_mode": True, "work_chunk_size": 1,
     "policy_bottom_candidate_limit": int(sys.argv[6]),
     "policy_discrepancy_budget": int(sys.argv[7]),
-    "policy_action_candidate_limit": int(sys.argv[8])
+    "policy_action_candidate_limit": int(sys.argv[8]),
+    "correction_policy_discrepancy_budget": int(sys.argv[9])
 }))
 PY
   ssh "${ssh_opts[@]}" "$RUNPOD_HOST" "$binary opening-batch-jsonl" \
@@ -92,7 +98,7 @@ while (( start < SAMPLES )); do
     start=$((start + count))
     continue
   fi
-  python3 - "$DECK_JSON" "$calibration" "$SEED" "$start" "$count" "$DEPTH" "$WORKERS" "$BOTTOM_CANDIDATES" "$DISCREPANCY_BUDGET" "$ACTION_CANDIDATES" > "$OUT_DIR/current_request.json" <<'PY'
+  python3 - "$DECK_JSON" "$calibration" "$SEED" "$start" "$count" "$DEPTH" "$WORKERS" "$BOTTOM_CANDIDATES" "$DISCREPANCY_BUDGET" "$ACTION_CANDIDATES" "$CORRECTION_DISCREPANCY_BUDGET" "$CORRECTION_NUMERATOR" "$CORRECTION_DENOMINATOR" > "$OUT_DIR/current_request.json" <<'PY'
 import json, sys
 deck = json.load(open(sys.argv[1]))["deck"]
 calibration = json.load(open(sys.argv[2]))
@@ -101,7 +107,8 @@ print(json.dumps({
     "seed": int(sys.argv[3]), "sample_start": int(sys.argv[4]), "samples": int(sys.argv[5]),
     "max_turn": 2, "depth": int(sys.argv[6]), "strict_reference": False,
     "discordance_limit": 100, "progress_interval": 10,
-    "correction_numerator": 0, "correction_denominator": 1,
+    "correction_numerator": int(sys.argv[12]),
+    "correction_denominator": int(sys.argv[13]),
     "workers": int(sys.argv[7]), "exact_slot_draws": False,
     "mulligan_pilot_samples": 1, "strict_mulligan_pilot_samples": 1,
     "fixture_mode": False, "commander_identity_mask": 31,
@@ -109,7 +116,9 @@ print(json.dumps({
     "policy_bottom_candidate_limit": int(sys.argv[8]),
     "policy_discrepancy_budget": int(sys.argv[9]),
     "policy_action_candidate_limit": int(sys.argv[10]),
-    "frozen_low_mulligan_continuation_ev": calibration["low_mulligan_continuation_ev"]
+    "correction_policy_discrepancy_budget": int(sys.argv[11]),
+    "frozen_low_mulligan_continuation_ev": calibration["low_mulligan_continuation_ev"],
+    "frozen_strict_mulligan_continuation_ev": calibration["strict_mulligan_continuation_ev"]
 }))
 PY
   ssh "${ssh_opts[@]}" "$RUNPOD_HOST" "$binary opening-batch-jsonl" \

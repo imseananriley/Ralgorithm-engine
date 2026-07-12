@@ -62,6 +62,8 @@ pub struct OpeningBatchRequest {
     pub policy_discrepancy_budget: u8,
     #[serde(default = "default_policy_action_candidate_limit")]
     pub policy_action_candidate_limit: usize,
+    #[serde(default)]
+    pub correction_policy_discrepancy_budget: Option<u8>,
     #[serde(default = "default_strict_mulligan_pilot_samples")]
     pub strict_mulligan_pilot_samples: u64,
     #[serde(default)]
@@ -195,7 +197,6 @@ struct CompiledVariant {
     influence: CardMask,
     support_manifest: OpeningSupportManifest,
     policy_bottom_candidate_limit: usize,
-    policy_discrepancy_budget: u8,
     policy_action_candidate_limit: usize,
 }
 
@@ -209,6 +210,12 @@ struct OpeningGameEvaluation {
 #[derive(Debug, Copy, Clone, Default)]
 struct MulliganEvPolicy {
     continuation_ev: [f64; 6],
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum OpeningSearchTier {
+    Exact,
+    Discrepancy(u8),
 }
 
 pub fn evaluate_opening_batch(
@@ -263,7 +270,6 @@ pub fn evaluate_opening_batch(
             influence,
             support_manifest,
             policy_bottom_candidate_limit: request.policy_bottom_candidate_limit.max(1),
-            policy_discrepancy_budget: request.policy_discrepancy_budget,
             policy_action_candidate_limit: request.policy_action_candidate_limit.max(1),
         });
     }
@@ -273,20 +279,27 @@ pub fn evaluate_opening_batch(
         .iter()
         .map(|variant| variant.name.clone())
         .collect();
+    let low_tier = if request.strict_reference {
+        OpeningSearchTier::Exact
+    } else {
+        OpeningSearchTier::Discrepancy(request.policy_discrepancy_budget)
+    };
     let low_mulligans = frozen_or_train_mulligans(
         &request.frozen_low_mulligan_continuation_ev,
         &variants,
         request,
         request.mulligan_pilot_samples,
-        false,
+        low_tier,
     )?;
-    let high_mulligans = if request.strict_reference || request.correction_numerator > 0 {
+    let high_mulligans = if request.strict_reference {
+        low_mulligans.clone()
+    } else if request.correction_numerator > 0 {
         frozen_or_train_mulligans(
             &request.frozen_strict_mulligan_continuation_ev,
             &variants,
             request,
             request.strict_mulligan_pilot_samples,
-            true,
+            correction_tier(request),
         )?
     } else {
         Vec::new()
@@ -363,11 +376,20 @@ pub fn evaluate_opening_batch(
         evaluator: if request.strict_reference {
             "visible-information reference expectimax".to_string()
         } else {
-            format!(
+            let mut label = format!(
                 "compiled visible-information limited-discrepancy search D={}, actions={}",
                 request.policy_discrepancy_budget,
                 request.policy_action_candidate_limit.max(1)
-            )
+            );
+            if request.correction_numerator > 0 {
+                match correction_tier(request) {
+                    OpeningSearchTier::Exact => label.push_str("; exact correction"),
+                    OpeningSearchTier::Discrepancy(budget) => {
+                        label.push_str(&format!("; D={budget} correction"));
+                    }
+                }
+            }
+            label
         },
         mulligan_policy: if request.strict_reference {
             "commander London 7,7,6,5,4,3; independent-pilot continuation EV; exhaustive bottoms"
@@ -500,6 +522,7 @@ fn model_digest(request: &OpeningBatchRequest) -> String {
         request.policy_bottom_candidate_limit,
         request.policy_discrepancy_budget,
         request.policy_action_candidate_limit,
+        request.correction_policy_discrepancy_budget,
         request
             .variants
             .iter()
@@ -554,6 +577,12 @@ fn run_shard(
     Vec<MultiFidelityAccumulator>,
     Vec<OpeningOutcomeAccumulator>,
 ) {
+    let low_tier = if request.strict_reference {
+        OpeningSearchTier::Exact
+    } else {
+        OpeningSearchTier::Discrepancy(request.policy_discrepancy_budget)
+    };
+    let high_tier = correction_tier(request);
     let batch = BatchEvaluator::new(BatchConfig {
         root_seed: request.seed,
         sample_start,
@@ -573,7 +602,7 @@ fn run_shard(
             sample_index,
             sample_seed,
             request.depth,
-            request.strict_reference,
+            low_tier,
             if request.strict_reference {
                 high_mulligans[variant_index]
             } else {
@@ -600,7 +629,7 @@ fn run_shard(
                 sample_index,
                 sample_seed,
                 request.depth,
-                true,
+                high_tier,
                 high_mulligans[variant_index],
             );
             multifidelity[variant_index].push_correction(
@@ -626,7 +655,7 @@ fn evaluate_game(
     sample_index: u64,
     sample_seed: u64,
     depth: u8,
-    strict_reference: bool,
+    tier: OpeningSearchTier,
     mulligan: MulliganEvPolicy,
 ) -> OpeningGameEvaluation {
     let gemstone_live = !sample_seed.is_multiple_of(4);
@@ -640,14 +669,7 @@ fn evaluate_game(
         );
         let visible: CardMask = permutation.iter().take(7).copied().collect();
         influenced |= !visible.intersect(variant.influence).is_empty();
-        let result = best_keep_outcome(
-            variant,
-            visible,
-            hand_size,
-            gemstone_live,
-            depth,
-            strict_reference,
-        );
+        let result = best_keep_outcome(variant, visible, hand_size, gemstone_live, depth, tier);
         let keep = hand_size == 3
             || result.outcome.weighted_ev >= mulligan.continuation_ev[(stage + 1).min(5)];
         if !keep {
@@ -667,7 +689,7 @@ fn frozen_or_train_mulligans(
     variants: &[CompiledVariant],
     request: &OpeningBatchRequest,
     pilot_samples: u64,
-    strict_reference: bool,
+    tier: OpeningSearchTier,
 ) -> Result<Vec<MulliganEvPolicy>, String> {
     if !frozen.is_empty() {
         if frozen.len() != variants.len() {
@@ -685,7 +707,7 @@ fn frozen_or_train_mulligans(
     }
     Ok(variants
         .iter()
-        .map(|variant| train_mulligan_policy(request, variant, pilot_samples, strict_reference))
+        .map(|variant| train_mulligan_policy(request, variant, pilot_samples, tier))
         .collect())
 }
 
@@ -693,7 +715,7 @@ fn train_mulligan_policy(
     request: &OpeningBatchRequest,
     variant: &CompiledVariant,
     pilot_samples: u64,
-    strict_reference: bool,
+    tier: OpeningSearchTier,
 ) -> MulliganEvPolicy {
     let samples = pilot_samples.max(1);
     let hand_sizes = [7usize, 7, 6, 5, 4, 3];
@@ -715,7 +737,7 @@ fn train_mulligan_policy(
                 hand_sizes[stage],
                 gemstone_live,
                 request.depth,
-                strict_reference,
+                tier,
             )
             .outcome
             .weighted_ev;
@@ -736,37 +758,43 @@ fn best_keep_outcome(
     hand_size: usize,
     gemstone_live: bool,
     depth: u8,
-    strict_reference: bool,
+    tier: OpeningSearchTier,
 ) -> OpeningOutcomeResult {
-    let model = if strict_reference {
-        &variant.reference_model
-    } else {
-        &variant.model
-    };
-    if strict_reference {
-        let mut solver = OpeningOutcomeSolver::new(model);
-        best_keep_outcome_with(
-            variant,
-            model,
-            visible,
-            hand_size,
-            gemstone_live,
-            usize::MAX,
-            |start| solver.solve(start, depth),
-        )
-    } else {
-        let mut solver =
-            OpeningOutcomeDiscrepancySolver::new(model, variant.policy_action_candidate_limit);
-        best_keep_outcome_with(
-            variant,
-            model,
-            visible,
-            hand_size,
-            gemstone_live,
-            variant.policy_bottom_candidate_limit,
-            |start| solver.solve(start, depth, variant.policy_discrepancy_budget),
-        )
+    match tier {
+        OpeningSearchTier::Exact => {
+            let model = &variant.reference_model;
+            let mut solver = OpeningOutcomeSolver::new(model);
+            best_keep_outcome_with(
+                variant,
+                model,
+                visible,
+                hand_size,
+                gemstone_live,
+                usize::MAX,
+                |start| solver.solve(start, depth),
+            )
+        }
+        OpeningSearchTier::Discrepancy(discrepancy_budget) => {
+            let model = &variant.model;
+            let mut solver =
+                OpeningOutcomeDiscrepancySolver::new(model, variant.policy_action_candidate_limit);
+            best_keep_outcome_with(
+                variant,
+                model,
+                visible,
+                hand_size,
+                gemstone_live,
+                variant.policy_bottom_candidate_limit,
+                |start| solver.solve(start, depth, discrepancy_budget),
+            )
+        }
     }
+}
+
+fn correction_tier(request: &OpeningBatchRequest) -> OpeningSearchTier {
+    request
+        .correction_policy_discrepancy_budget
+        .map_or(OpeningSearchTier::Exact, OpeningSearchTier::Discrepancy)
 }
 
 fn best_keep_outcome_with(
@@ -952,6 +980,7 @@ mod tests {
             policy_bottom_candidate_limit: 4,
             policy_discrepancy_budget: 2,
             policy_action_candidate_limit: 4,
+            correction_policy_discrepancy_budget: None,
             strict_mulligan_pilot_samples: 2,
             frozen_low_mulligan_continuation_ev: Vec::new(),
             frozen_strict_mulligan_continuation_ev: Vec::new(),
@@ -980,6 +1009,7 @@ mod tests {
         corrected_request.strict_reference = false;
         corrected_request.correction_numerator = 1;
         corrected_request.correction_denominator = 1;
+        corrected_request.correction_policy_discrepancy_budget = Some(1);
         let corrected = evaluate_opening_batch(&corrected_request).expect("corrected batch");
         let estimate = corrected.multifidelity[0].expect("all samples corrected");
         assert_eq!(estimate.low_samples, 10);
@@ -1024,6 +1054,7 @@ mod tests {
             policy_bottom_candidate_limit: 4,
             policy_discrepancy_budget: 2,
             policy_action_candidate_limit: 4,
+            correction_policy_discrepancy_budget: None,
             strict_mulligan_pilot_samples: 2,
             frozen_low_mulligan_continuation_ev: Vec::new(),
             frozen_strict_mulligan_continuation_ev: Vec::new(),
@@ -1057,14 +1088,61 @@ mod tests {
                 &EngineOpeningModel::compile(&deck, 2),
             ),
             policy_bottom_candidate_limit: 4,
-            policy_discrepancy_budget: 2,
             policy_action_candidate_limit: 4,
         };
         let visible = (0..7).collect();
 
-        let outcome = best_keep_outcome(&variant, visible, 3, false, 16, true);
+        let outcome = best_keep_outcome(&variant, visible, 3, false, 16, OpeningSearchTier::Exact);
 
         assert_eq!(outcome.outcome.rhystic_turn_1, 1.0);
+    }
+
+    #[test]
+    fn discrepancy_search_finds_birds_gamble_crop_rotation_line() {
+        let names = [
+            "Crop Rotation",
+            "Gamble",
+            "Mystical Tutor",
+            "Ranger-Captain of Eos",
+            "Windswept Heath",
+            "Birds of Paradise",
+            "Commandeer",
+            "Rhystic Study",
+            "Ancient Tomb",
+            "Command Tower",
+            "Tropical Island",
+            "Blank library",
+        ]
+        .map(str::to_string);
+        let deck = DeckSpec::compile(&names).expect("manual recall fixture");
+        let model = EngineOpeningModel::compile(&deck, 2);
+        let variant = CompiledVariant {
+            reference_model: model.clone().with_quotient_draws(false),
+            model,
+            deck_mask: deck.card_mask(),
+            deck_len: deck.cards().len(),
+            influence: CardMask::EMPTY,
+            support_manifest: OpeningSupportManifest {
+                variant: "manual-recall".to_string(),
+                supported: Vec::new(),
+                inert: Vec::new(),
+                unsupported_opening_relevant: Vec::new(),
+            },
+            policy_bottom_candidate_limit: usize::MAX,
+            policy_action_candidate_limit: 2,
+        };
+        let visible = (0..7).collect();
+
+        let outcome = best_keep_outcome(
+            &variant,
+            visible,
+            5,
+            false,
+            18,
+            OpeningSearchTier::Discrepancy(2),
+        );
+
+        assert!(outcome.outcome.rhystic_turn_2 > 0.0);
     }
 
     #[test]
@@ -1095,6 +1173,7 @@ mod tests {
             policy_bottom_candidate_limit: 4,
             policy_discrepancy_budget: 2,
             policy_action_candidate_limit: 4,
+            correction_policy_discrepancy_budget: None,
             strict_mulligan_pilot_samples: 1,
             frozen_low_mulligan_continuation_ev: Vec::new(),
             frozen_strict_mulligan_continuation_ev: Vec::new(),
@@ -1142,6 +1221,7 @@ mod tests {
             policy_bottom_candidate_limit: 4,
             policy_discrepancy_budget: 2,
             policy_action_candidate_limit: 4,
+            correction_policy_discrepancy_budget: None,
             strict_mulligan_pilot_samples: 1,
             frozen_low_mulligan_continuation_ev: Vec::new(),
             frozen_strict_mulligan_continuation_ev: Vec::new(),
