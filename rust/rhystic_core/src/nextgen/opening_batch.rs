@@ -1,8 +1,10 @@
+use blake2::digest::{Update, VariableOutput};
+use blake2::Blake2bVar;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 use super::{
-    independent_sample_selected, merge_batch_reports, slot_permutation, BatchConfig,
+    independent_sample_selected, merge_batch_reports, slot_permutation, ActionClass, BatchConfig,
     BatchEvaluation, BatchEvaluator, BatchReport, CardMask, DeckSpec, EngineOpeningModel, Estimate,
     MultiFidelityAccumulator, OpeningOutcome, OpeningOutcomePolicySolver, OpeningOutcomeResult,
     OpeningOutcomeSolver, PackedLibrary, PackedStateV2, SearchMetrics, VisibleOpeningPolicy,
@@ -45,6 +47,12 @@ pub struct OpeningBatchRequest {
     pub exact_slot_draws: bool,
     #[serde(default = "default_mulligan_pilot_samples")]
     pub mulligan_pilot_samples: u64,
+    #[serde(default)]
+    pub fixture_mode: bool,
+    #[serde(default = "default_commander_identity")]
+    pub commander_identity_mask: u8,
+    #[serde(default = "default_true")]
+    pub publication_mode: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -56,6 +64,18 @@ pub struct OpeningBatchResponse {
     pub paired_multifidelity_delta: Vec<Option<Estimate>>,
     pub outcomes: Vec<OpeningOutcomeSummary>,
     pub mulligan_continuation_ev: Vec<[f64; 6]>,
+    pub deck_validation: String,
+    pub model_digest: String,
+    pub request_digest: String,
+    pub support_manifests: Vec<OpeningSupportManifest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpeningSupportManifest {
+    pub variant: String,
+    pub supported: Vec<String>,
+    pub inert: Vec<String>,
+    pub unsupported_opening_relevant: Vec<String>,
 }
 
 #[derive(Debug, Copy, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -140,6 +160,7 @@ struct CompiledVariant {
     deck_mask: CardMask,
     deck_len: usize,
     influence: CardMask,
+    support_manifest: OpeningSupportManifest,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -160,8 +181,13 @@ pub fn evaluate_opening_batch(
         return Err("opening batch requires at least one variant".to_string());
     }
     let expected_len = request.variants[0].deck.len();
-    if expected_len < 7 {
+    if request.fixture_mode && expected_len < 7 {
         return Err("opening batch decks require at least seven cards".to_string());
+    }
+    if !request.fixture_mode && expected_len != 99 {
+        return Err(format!(
+            "production Commander decks require exactly 99 library cards; received {expected_len}"
+        ));
     }
     let mut variants = Vec::with_capacity(request.variants.len());
     for variant in &request.variants {
@@ -169,17 +195,36 @@ pub fn evaluate_opening_batch(
             return Err("all aligned variants must have the same deck length".to_string());
         }
         let deck = DeckSpec::compile(&variant.deck)?;
+        for card in deck.cards() {
+            if card.color_mask & !request.commander_identity_mask != 0 {
+                return Err(format!(
+                    "{} is outside commander color identity mask {:05b}",
+                    card.name, request.commander_identity_mask
+                ));
+            }
+        }
         let influence = variant.influence_slots.iter().copied().collect();
+        let model = EngineOpeningModel::compile(&deck, request.max_turn)
+            .with_quotient_draws(!request.exact_slot_draws);
+        let support_manifest = support_manifest(&variant.name, &deck, &model);
+        if request.publication_mode && !support_manifest.unsupported_opening_relevant.is_empty() {
+            return Err(format!(
+                "variant {} has unsupported opening-relevant cards: {}",
+                variant.name,
+                support_manifest.unsupported_opening_relevant.join(", ")
+            ));
+        }
         variants.push(CompiledVariant {
-            model: EngineOpeningModel::compile(&deck, request.max_turn)
-                .with_quotient_draws(!request.exact_slot_draws),
+            model,
             reference_model: EngineOpeningModel::compile(&deck, request.max_turn)
                 .with_quotient_draws(false),
             deck_mask: deck.card_mask(),
             deck_len: deck.cards().len(),
             influence,
+            support_manifest,
         });
     }
+    validate_variant_alignment(request)?;
     let names: Vec<_> = request
         .variants
         .iter()
@@ -289,7 +334,112 @@ pub fn evaluate_opening_batch(
         .into_iter()
         .map(|policy| policy.continuation_ev)
         .collect(),
+        deck_validation: if request.fixture_mode {
+            "fixture: singleton packed slots; minimum seven cards".to_string()
+        } else {
+            "production: 99-card singleton library and commander color identity".to_string()
+        },
+        model_digest: model_digest(request),
+        request_digest: digest_bytes(
+            &serde_json::to_vec(request).map_err(|error| error.to_string())?,
+        ),
+        support_manifests: variants
+            .into_iter()
+            .map(|variant| variant.support_manifest)
+            .collect(),
     })
+}
+
+fn validate_variant_alignment(request: &OpeningBatchRequest) -> Result<(), String> {
+    if request.variants.len() < 2 {
+        return Ok(());
+    }
+    let baseline = &request.variants[0].deck;
+    let mut baseline_differences = Vec::new();
+    for variant in request.variants.iter().skip(1) {
+        let differences: Vec<u8> = baseline
+            .iter()
+            .zip(&variant.deck)
+            .enumerate()
+            .filter_map(|(slot, (left, right))| (left != right).then_some(slot as u8))
+            .collect();
+        let mut declared = variant.influence_slots.clone();
+        declared.sort_unstable();
+        declared.dedup();
+        if declared != differences {
+            return Err(format!(
+                "variant {} influence slots {:?} do not equal changed slots {:?}",
+                variant.name, declared, differences
+            ));
+        }
+        baseline_differences.extend(differences);
+    }
+    baseline_differences.sort_unstable();
+    baseline_differences.dedup();
+    let mut baseline_declared = request.variants[0].influence_slots.clone();
+    baseline_declared.sort_unstable();
+    baseline_declared.dedup();
+    if baseline_declared != baseline_differences {
+        return Err(format!(
+            "baseline influence slots {:?} do not equal the union of changed slots {:?}",
+            baseline_declared, baseline_differences
+        ));
+    }
+    Ok(())
+}
+
+fn support_manifest(
+    variant_name: &str,
+    deck: &DeckSpec,
+    model: &EngineOpeningModel,
+) -> OpeningSupportManifest {
+    let supported_slots = model.supported_slots();
+    let mut manifest = OpeningSupportManifest {
+        variant: variant_name.to_string(),
+        supported: Vec::new(),
+        inert: Vec::new(),
+        unsupported_opening_relevant: Vec::new(),
+    };
+    for card in deck.cards() {
+        if supported_slots.contains(card.slot) {
+            manifest.supported.push(card.name.to_string());
+        } else if matches!(
+            card.action_class,
+            ActionClass::Land | ActionClass::Mana | ActionClass::Tutor | ActionClass::Engine
+        ) {
+            manifest
+                .unsupported_opening_relevant
+                .push(card.name.to_string());
+        } else {
+            manifest.inert.push(card.name.to_string());
+        }
+    }
+    manifest
+}
+
+fn model_digest(request: &OpeningBatchRequest) -> String {
+    let model_input = (
+        "rhystic-nextgen-opening-v2",
+        request.max_turn,
+        request.exact_slot_draws,
+        request.commander_identity_mask,
+        request
+            .variants
+            .iter()
+            .map(|variant| (&variant.name, &variant.deck))
+            .collect::<Vec<_>>(),
+    );
+    digest_bytes(&serde_json::to_vec(&model_input).expect("model digest input serializes"))
+}
+
+fn digest_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Blake2bVar::new(16).expect("valid digest size");
+    hasher.update(bytes);
+    let mut digest = [0; 16];
+    hasher
+        .finalize_variable(&mut digest)
+        .expect("digest output size");
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn run_shard(
@@ -580,6 +730,14 @@ const fn default_mulligan_pilot_samples() -> u64 {
     64
 }
 
+const fn default_commander_identity() -> u8 {
+    0b1_1111
+}
+
+const fn default_true() -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -618,6 +776,9 @@ mod tests {
             workers: 1,
             exact_slot_draws: false,
             mulligan_pilot_samples: 8,
+            fixture_mode: true,
+            commander_identity_mask: 0b1_1111,
+            publication_mode: true,
         };
         let left = evaluate_opening_batch(&request).expect("batch");
         let right = evaluate_opening_batch(&request).expect("batch");
@@ -672,6 +833,9 @@ mod tests {
             workers: 1,
             exact_slot_draws: false,
             mulligan_pilot_samples: 8,
+            fixture_mode: true,
+            commander_identity_mask: 0b1_1111,
+            publication_mode: true,
         };
         assert!(evaluate_opening_batch(&request).is_err());
     }
@@ -696,11 +860,86 @@ mod tests {
             deck_mask: deck.card_mask(),
             deck_len: deck.cards().len(),
             influence: CardMask::EMPTY,
+            support_manifest: support_manifest(
+                "fixture",
+                &deck,
+                &EngineOpeningModel::compile(&deck, 2),
+            ),
         };
         let visible = (0..7).collect();
 
         let outcome = best_keep_outcome(&variant, visible, 3, false, 16, true);
 
         assert_eq!(outcome.outcome.rhystic_turn_1, 1.0);
+    }
+
+    #[test]
+    fn production_mode_requires_a_ninety_nine_card_library() {
+        let request = OpeningBatchRequest {
+            variants: vec![OpeningVariantSpec {
+                name: "short".to_string(),
+                deck: (0..7).map(|index| format!("Blank {index}")).collect(),
+                influence_slots: Vec::new(),
+            }],
+            seed: 1,
+            sample_start: 0,
+            samples: 1,
+            max_turn: 2,
+            depth: 8,
+            strict_reference: false,
+            discordance_limit: 1,
+            progress_interval: 1,
+            correction_numerator: 0,
+            correction_denominator: 1,
+            workers: 1,
+            exact_slot_draws: false,
+            mulligan_pilot_samples: 1,
+            fixture_mode: false,
+            commander_identity_mask: 0b1_1111,
+            publication_mode: true,
+        };
+        assert!(evaluate_opening_batch(&request)
+            .expect_err("short production deck")
+            .contains("exactly 99"));
+    }
+
+    #[test]
+    fn publication_mode_rejects_unimplemented_opening_relevant_cards() {
+        let request = OpeningBatchRequest {
+            variants: vec![OpeningVariantSpec {
+                name: "unsupported".to_string(),
+                deck: [
+                    "Beseech the Mirror",
+                    "Blank A",
+                    "Blank B",
+                    "Blank C",
+                    "Blank D",
+                    "Blank E",
+                    "Blank F",
+                ]
+                .map(str::to_string)
+                .to_vec(),
+                influence_slots: Vec::new(),
+            }],
+            seed: 1,
+            sample_start: 0,
+            samples: 1,
+            max_turn: 2,
+            depth: 8,
+            strict_reference: false,
+            discordance_limit: 1,
+            progress_interval: 1,
+            correction_numerator: 0,
+            correction_denominator: 1,
+            workers: 1,
+            exact_slot_draws: false,
+            mulligan_pilot_samples: 1,
+            fixture_mode: true,
+            commander_identity_mask: 0b1_1111,
+            publication_mode: true,
+        };
+        assert!(evaluate_opening_batch(&request)
+            .expect_err("unsupported tutor")
+            .contains("Beseech the Mirror"));
     }
 }

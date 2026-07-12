@@ -46,7 +46,7 @@ pub use multifidelity::{
 };
 pub use opening_batch::{
     evaluate_opening_batch, OpeningBatchRequest, OpeningBatchResponse, OpeningOutcomeAccumulator,
-    OpeningOutcomeSummary, OpeningVariantSpec,
+    OpeningOutcomeSummary, OpeningSupportManifest, OpeningVariantSpec,
 };
 pub use opening_model::{EngineOpeningModel, OpeningMulliganPolicy, VisibleOpeningPolicy};
 pub use outcome::{
