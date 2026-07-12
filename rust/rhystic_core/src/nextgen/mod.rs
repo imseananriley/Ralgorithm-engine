@@ -31,7 +31,9 @@ pub use card_spec::{
     OpeningArtifactKind, OpeningCreatureKind, OpeningLandKind, OpeningManaProfile,
     OpeningSpellKind,
 };
-pub use library::{ChanceDraw, ClassChanceDraw, PackedLibrary, KNOWN_TOP_CAPACITY};
+pub use library::{
+    ChanceDraw, ClassChanceDraw, PackedLibrary, KNOWN_BOTTOM_CAPACITY, KNOWN_TOP_CAPACITY,
+};
 pub use mana_closure::{
     compute_mana_closure, compute_payment_plans, ManaOption, ManaOutcome, ManaPool, ManaSource,
     PaymentPlan, ResourceConsumption, ResourceUse,
@@ -131,6 +133,52 @@ mod tests {
         library.shuffle_all_unknown();
         assert_eq!(library.known_top_len(), 0);
         assert_eq!(library.cards(), [2, 7, 11].into_iter().collect());
+    }
+
+    #[test]
+    fn london_bottoms_are_drawn_only_after_the_unknown_library() {
+        let mut library = PackedLibrary::new([2, 7, 11, 20].into_iter().collect());
+        library.push_known_bottom(7);
+        library.push_known_bottom(11);
+
+        assert_eq!(library.known_bottom_len(), 2);
+        assert_eq!(
+            library.chance_draws(),
+            vec![
+                ChanceDraw {
+                    slot: 2,
+                    numerator: 1,
+                    denominator: 2,
+                },
+                ChanceDraw {
+                    slot: 20,
+                    numerator: 1,
+                    denominator: 2,
+                },
+            ]
+        );
+        assert!(!library.draw(7));
+        assert!(library.draw(2));
+        assert!(library.draw(20));
+        assert_eq!(library.chance_draws()[0].slot, 7);
+        assert!(library.draw(7));
+        assert_eq!(library.chance_draws()[0].slot, 11);
+    }
+
+    #[test]
+    fn tutors_can_remove_bottomed_cards_and_shuffles_forget_bottom_order() {
+        let mut library = PackedLibrary::new([2, 7, 11].into_iter().collect());
+        library.push_known_bottom(7);
+        assert!(library.remove_known_or_unknown(7));
+        assert_eq!(library.known_bottom_len(), 0);
+        assert_eq!(library.cards(), [2, 11].into_iter().collect());
+
+        library.insert_unknown(7);
+        library.push_known_bottom(7);
+        library.shuffle_all_unknown();
+        assert_eq!(library.known_bottom_len(), 0);
+        assert_eq!(library.cards(), [2, 7, 11].into_iter().collect());
+        assert_eq!(library.chance_draws().len(), 3);
     }
 
     #[test]

@@ -3,12 +3,15 @@ use serde::{Deserialize, Serialize};
 use super::{CardMask, SlotId};
 
 pub const KNOWN_TOP_CAPACITY: usize = 4;
+pub const KNOWN_BOTTOM_CAPACITY: usize = 4;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PackedLibrary {
     unknown: CardMask,
     known_top: [SlotId; KNOWN_TOP_CAPACITY],
     known_top_len: u8,
+    known_bottom: [SlotId; KNOWN_BOTTOM_CAPACITY],
+    known_bottom_len: u8,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +35,8 @@ impl PackedLibrary {
             unknown,
             known_top: [0; KNOWN_TOP_CAPACITY],
             known_top_len: 0,
+            known_bottom: [0; KNOWN_BOTTOM_CAPACITY],
+            known_bottom_len: 0,
         }
     }
 
@@ -41,6 +46,10 @@ impl PackedLibrary {
 
     pub const fn known_top_len(self) -> usize {
         self.known_top_len as usize
+    }
+
+    pub const fn known_bottom_len(self) -> usize {
+        self.known_bottom_len as usize
     }
 
     pub fn push_known_top(&mut self, slot: SlotId) {
@@ -55,13 +64,36 @@ impl PackedLibrary {
         self.known_top_len += 1;
     }
 
+    pub fn push_known_bottom(&mut self, slot: SlotId) {
+        assert!(
+            self.known_bottom_len() < KNOWN_BOTTOM_CAPACITY,
+            "known-bottom stack capacity exceeded"
+        );
+        assert!(
+            self.remove_known_or_unknown(slot),
+            "known-bottom card must already be in the library"
+        );
+        let len = self.known_bottom_len();
+        self.known_bottom[len] = slot;
+        self.known_bottom_len += 1;
+    }
+
     pub fn remove_known_or_unknown(&mut self, slot: SlotId) -> bool {
         if self.unknown.remove(slot) {
             return true;
         }
         let len = self.known_top_len();
         let Some(index) = self.known_top[..len].iter().position(|item| *item == slot) else {
-            return false;
+            let len = self.known_bottom_len();
+            let Some(index) = self.known_bottom[..len]
+                .iter()
+                .position(|item| *item == slot)
+            else {
+                return false;
+            };
+            self.known_bottom.copy_within(index + 1..len, index);
+            self.known_bottom_len -= 1;
+            return true;
         };
         self.known_top.copy_within(index + 1..len, index);
         self.known_top_len -= 1;
@@ -72,7 +104,11 @@ impl PackedLibrary {
         for index in 0..self.known_top_len() {
             self.unknown.insert(self.known_top[index]);
         }
+        for index in 0..self.known_bottom_len() {
+            self.unknown.insert(self.known_bottom[index]);
+        }
         self.known_top_len = 0;
+        self.known_bottom_len = 0;
     }
 
     pub fn insert_unknown(&mut self, slot: SlotId) -> bool {
@@ -86,6 +122,13 @@ impl PackedLibrary {
         if self.known_top_len > 0 {
             return vec![ChanceDraw {
                 slot: self.known_top[0],
+                numerator: 1,
+                denominator: 1,
+            }];
+        }
+        if self.unknown.is_empty() && self.known_bottom_len > 0 {
+            return vec![ChanceDraw {
+                slot: self.known_bottom[0],
                 numerator: 1,
                 denominator: 1,
             }];
@@ -104,6 +147,16 @@ impl PackedLibrary {
     pub fn class_chance_draws(self, class_by_slot: &[u8; 128]) -> Vec<ClassChanceDraw> {
         if self.known_top_len > 0 {
             let slot = self.known_top[0];
+            return vec![ClassChanceDraw {
+                class_id: class_by_slot[slot as usize],
+                representative: slot,
+                numerator: 1,
+                denominator: 1,
+            }];
+        }
+
+        if self.unknown.is_empty() && self.known_bottom_len > 0 {
+            let slot = self.known_bottom[0];
             return vec![ClassChanceDraw {
                 class_id: class_by_slot[slot as usize],
                 representative: slot,
@@ -144,16 +197,28 @@ impl PackedLibrary {
             self.known_top_len -= 1;
             return true;
         }
-        self.unknown.remove(slot)
+        if !self.unknown.is_empty() {
+            return self.unknown.remove(slot);
+        }
+        if self.known_bottom_len == 0 || self.known_bottom[0] != slot {
+            return false;
+        }
+        let len = self.known_bottom_len();
+        self.known_bottom.copy_within(1..len, 0);
+        self.known_bottom_len -= 1;
+        true
     }
 
     pub fn card_count(self) -> u32 {
-        self.unknown.len() + u32::from(self.known_top_len)
+        self.unknown.len() + u32::from(self.known_top_len) + u32::from(self.known_bottom_len)
     }
 
     pub fn cards(self) -> CardMask {
         let mut cards = self.unknown;
         for slot in &self.known_top[..self.known_top_len()] {
+            cards.insert(*slot);
+        }
+        for slot in &self.known_bottom[..self.known_bottom_len()] {
             cards.insert(*slot);
         }
         cards

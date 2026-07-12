@@ -485,13 +485,39 @@ impl EngineOpeningModel {
         score
     }
 
+    fn visible_mulligan_score(&self, state: PackedStateV2, gemstone_caverns_live: bool) -> i32 {
+        self.pregame_states(state, gemstone_caverns_live)
+            .into_iter()
+            .map(|start| {
+                let active_caverns = start
+                    .battlefield
+                    .as_slice()
+                    .iter()
+                    .filter(|permanent| {
+                        permanent.counters() > 0
+                            && permanent.source().card_slot().is_some_and(|slot| {
+                                matches!(
+                                    self.land_kind(slot),
+                                    Some(OpeningLandKind::GemstoneCaverns)
+                                )
+                            })
+                    })
+                    .count() as i32;
+                self.visible_hand_score(start) + active_caverns * 8
+            })
+            .max()
+            .unwrap_or(i32::MIN)
+    }
+
     pub fn should_keep(
         &self,
         policy: OpeningMulliganPolicy,
         state: PackedStateV2,
         hand_size: usize,
+        gemstone_caverns_live: bool,
     ) -> bool {
-        self.visible_hand_score(state) >= policy.minimum_score_by_hand_size[hand_size.min(7)]
+        self.visible_mulligan_score(state, gemstone_caverns_live)
+            >= policy.minimum_score_by_hand_size[hand_size.min(7)]
     }
 
     pub fn bottom_priority(&self, slot: SlotId) -> i32 {
@@ -2621,9 +2647,24 @@ mod tests {
         right.library.push_known_top(4);
         let policy = OpeningMulliganPolicy::default();
         assert_eq!(
-            model.should_keep(policy, left, 3),
-            model.should_keep(policy, right, 3)
+            model.should_keep(policy, left, 3, false),
+            model.should_keep(policy, right, 3, false)
         );
+    }
+
+    #[test]
+    fn mulligan_decision_uses_the_presampled_caverns_status() {
+        let model = model(&["Gemstone Caverns", "Blank A", "Blank B"]);
+        let state = PackedStateV2 {
+            hand: [0, 1, 2].into_iter().collect(),
+            ..PackedStateV2::default()
+        };
+        let policy = OpeningMulliganPolicy {
+            minimum_score_by_hand_size: [3; 8],
+        };
+
+        assert!(!model.should_keep(policy, state, 7, false));
+        assert!(model.should_keep(policy, state, 7, true));
     }
 
     #[test]

@@ -226,19 +226,26 @@ fn evaluate_game(
             library: PackedLibrary::new(variant.deck_mask.difference(visible)),
             ..PackedStateV2::default()
         };
-        let keep = hand_size == 3 || model.should_keep(mulligan, visible_state, hand_size);
+        let keep =
+            hand_size == 3 || model.should_keep(mulligan, visible_state, hand_size, gemstone_live);
         if !keep {
             continue;
         }
         let mut bottom_order: Vec<_> = visible.iter().collect();
         bottom_order.sort_by_key(|slot| (model.bottom_priority(*slot), *slot));
+        let bottoms: Vec<_> = bottom_order.into_iter().take(7 - hand_size).collect();
         let mut hand = visible;
-        for bottom in bottom_order.into_iter().take(7 - hand_size) {
-            hand.remove(bottom);
+        for bottom in &bottoms {
+            hand.remove(*bottom);
+        }
+        let mut library = PackedLibrary::new(variant.deck_mask.difference(visible));
+        for bottom in bottoms {
+            library.insert_unknown(bottom);
+            library.push_known_bottom(bottom);
         }
         let state = PackedStateV2 {
             hand,
-            library: PackedLibrary::new(variant.deck_mask.difference(hand)),
+            library,
             ..PackedStateV2::default()
         };
         let value = model
