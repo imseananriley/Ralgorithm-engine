@@ -10,6 +10,7 @@ mod metrics;
 mod multifidelity;
 mod opening_batch;
 mod opening_model;
+mod opening_replay;
 mod outcome;
 mod policy;
 mod reference_solver;
@@ -49,6 +50,10 @@ pub use opening_batch::{
     OpeningOutcomeSummary, OpeningSupportManifest, OpeningVariantSpec,
 };
 pub use opening_model::{EngineOpeningModel, OpeningMulliganPolicy, VisibleOpeningPolicy};
+pub use opening_replay::{
+    evaluate_opening_replay, OpeningReplayGame, OpeningReplayGameOutcome, OpeningReplayRequest,
+    OpeningReplayResponse, OpeningReplayTierOutcome,
+};
 pub use outcome::{
     evaluate_opening_outcome_policy, OpeningOutcome, OpeningOutcomeDiscrepancySolver,
     OpeningOutcomeModel, OpeningOutcomePolicySolver, OpeningOutcomeResult, OpeningOutcomeSolver,

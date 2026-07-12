@@ -16,7 +16,7 @@ use rhystic_core::{
     mana_checksum,
     nextgen::{
         bench_nextgen, bench_opening_model, bench_packed_state_v2, evaluate_opening_batch,
-        OpeningBatchRequest,
+        evaluate_opening_replay, OpeningBatchRequest, OpeningReplayRequest,
     },
     pay_options, solve_keep, verify_action_fixtures, CloseTurnRequest, Cost, EarliestRequest,
     FixtureState, Mana, PolicyEvalFastRequest, PolicySimFastRequest,
@@ -662,6 +662,42 @@ fn main() {
                         .flush()
                         .expect("failed to flush raw delta stream JSONL output");
                 });
+            }
+        }
+        "opening-replay-jsonl" => {
+            let stdin = io::stdin();
+            let mut stdout = io::stdout().lock();
+            for line in stdin.lock().lines() {
+                let line = line.expect("failed to read stdin");
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let request: OpeningReplayRequest = match serde_json::from_str(&line) {
+                    Ok(request) => request,
+                    Err(err) => {
+                        writeln!(
+                            stdout,
+                            "{{\"error\":{}}}",
+                            serde_json::to_string(&err.to_string()).expect("error JSON")
+                        )
+                        .expect("failed to write JSONL error");
+                        continue;
+                    }
+                };
+                match evaluate_opening_replay(&request) {
+                    Ok(response) => serde_json::to_writer(&mut stdout, &response)
+                        .expect("failed to write opening replay JSON"),
+                    Err(err) => write!(
+                        stdout,
+                        "{{\"error\":{}}}",
+                        serde_json::to_string(&err).expect("error JSON")
+                    )
+                    .expect("failed to write opening replay error"),
+                }
+                writeln!(stdout).expect("failed to write JSONL newline");
+                stdout
+                    .flush()
+                    .expect("failed to flush opening replay JSONL");
             }
         }
         "opening-batch-jsonl" => {
