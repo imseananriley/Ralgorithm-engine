@@ -49,6 +49,7 @@ LANDS = {
     "Sink into Stupor": ("modeled", "mdfc_land", "modeled as untapped blue MDFC land for this objective"),
     "Starting Town": ("modeled", "land", "five-color land"),
     "Steam Vents": ("modeled", "land", "typed RU shock"),
+    "Taiga": ("modeled", "land", "typed RG dual"),
     "Tarnished Citadel": ("modeled", "land", "five-color land"),
     "Tropical Island": ("modeled", "land", "typed UG dual"),
     "Tundra": ("modeled", "land", "typed UW dual"),
@@ -79,6 +80,7 @@ ACTION_CARDS = {
     "Faerie Mastermind": ("partial", "creature_body", "castable MV2 blue creature body; draw text not modeled"),
     "Gamble": ("modeled", "tutor", "simplified stochastic discard mode"),
     "Green Sun's Zenith": ("modeled", "creature_tutor", "finds Heartwood or supported green mana creatures"),
+    "Gitaxian Probe": ("modeled", "draw", "casts for two life and draws the next card"),
     "Grim Tutor": ("modeled", "tutor", "finds engine to hand"),
     "Heartwood Storyteller": ("modeled", "engine", "native objective engine"),
     "Idyllic Tutor": ("modeled", "tutor", "finds Rhystic to hand"),
@@ -134,6 +136,7 @@ PASSIVE_BY_DESIGN = {
     "Force of Negation": "interaction/pitch card",
     "Force of Will": "interaction/pitch card",
     "Mental Misstep": "interaction",
+    "Mindbreak Trap": "interaction/pitch card",
     "Misdirection": "interaction/pitch card",
     "Molten Disaster": "win/protection card, not pre-engine acceleration",
     "Mystic Remora": "not optimized in current Rhystic/Heartwood objective",
@@ -273,11 +276,20 @@ PROBES: dict[str, dict[str, Any]] = {
         "negative_gemstone_live": False,
         "max_turns": 1,
     },
+    "Gitaxian Probe": {
+        "hand": ["Ancient Tomb", "Lotus Petal", "Gitaxian Probe"],
+        "negative_hand": ["Ancient Tomb", "Lotus Petal", "Blank"],
+        "library": ["Blank", "Rhystic Study"],
+        "expect": "Rhystic Study",
+        "max_turns": 1,
+    },
 }
 
 
 def read_deck_names(path: Path) -> list[str]:
     payload = json.loads(path.read_text()[path.read_text().find("{") :])
+    if isinstance(payload.get("deck"), list):
+        return [str(name) for name in payload["deck"]]
     cards = ((payload.get("boards") or {}).get("mainboard") or {}).get("cards") or {}
     names: list[str] = []
     for entry in cards.values():
@@ -383,7 +395,7 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "probe_label",
     ]
     with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         for row in rows:
             writer.writerow({key: row.get(key, "") for key in fieldnames})

@@ -100,6 +100,18 @@ mod tests {
     }
 
     #[test]
+    fn red_duals_compile_as_typed_colored_lands() {
+        let deck = DeckSpec::compile(&["Badlands".to_string(), "Taiga".to_string()])
+            .expect("valid typed duals");
+        for card in deck.cards() {
+            assert!(card.flags.contains(CardFlags::LAND));
+            assert_eq!(card.opening_mana.kind, OpeningLandKind::Simple);
+            assert_eq!(card.opening_mana.color_mask.count_ones(), 2);
+            assert_eq!(card.opening_mana.land_types.count_ones(), 2);
+        }
+    }
+
+    #[test]
     fn library_exposes_only_known_top_or_uniform_unknown_draws() {
         let mut library = PackedLibrary::new([2, 7, 11].into_iter().collect());
         let unknown = library.chance_draws();

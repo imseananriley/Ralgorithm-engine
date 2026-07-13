@@ -483,7 +483,8 @@ impl EngineOpeningModel {
                 | OpeningSpellKind::SimianSpiritGuide => 300,
                 OpeningSpellKind::Gamble
                 | OpeningSpellKind::NoxiousRevival
-                | OpeningSpellKind::AnOfferYouCantRefuse => 250,
+                | OpeningSpellKind::AnOfferYouCantRefuse
+                | OpeningSpellKind::GitaxianProbe => 250,
                 OpeningSpellKind::None => 0,
             },
             Some(OpeningCard::Creature(kind)) => match kind {
@@ -550,7 +551,7 @@ impl EngineOpeningModel {
                     | OpeningSpellKind::InfernalPlunge
                     | OpeningSpellKind::RainOfFilth
                     | OpeningSpellKind::EldritchEvolution => 2,
-                    OpeningSpellKind::AnOfferYouCantRefuse => 2,
+                    OpeningSpellKind::AnOfferYouCantRefuse | OpeningSpellKind::GitaxianProbe => 2,
                     OpeningSpellKind::None => 0,
                 },
                 Some(OpeningCard::Creature(kind)) => match kind {
@@ -1684,6 +1685,37 @@ impl EngineOpeningModel {
         }
     }
 
+    fn generate_gitaxian_probe(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        for slot in state.hand.iter().filter(|slot| {
+            matches!(
+                self.spell_kind(*slot),
+                Some(OpeningSpellKind::GitaxianProbe)
+            )
+        }) {
+            let mut next = state;
+            if !next.move_card(slot, Zone::Hand, Zone::Graveyard) {
+                continue;
+            }
+            let draws = self.chance_draws(next);
+            if draws.is_empty() {
+                out.push(InformationTransition::Deterministic(next));
+                continue;
+            }
+            let outcomes = draws
+                .into_iter()
+                .filter_map(|(drawn_slot, probability)| {
+                    let mut drawn = next;
+                    drawn.draw(drawn_slot).then_some((drawn, probability))
+                })
+                .collect();
+            out.push(InformationTransition::Chance(outcomes));
+        }
+    }
+
     fn generate_gamble(
         &self,
         state: PackedStateV2,
@@ -2446,6 +2478,7 @@ impl InformationModel for EngineOpeningModel {
         self.generate_demonic_led_tutors(state, out);
         self.generate_wishclaw_tutors(state, out);
         self.generate_manamorphose(state, out);
+        self.generate_gitaxian_probe(state, out);
         self.generate_gamble(state, out);
         self.generate_noxious_revival(state, out);
         if self.resource_microsteps {
@@ -3341,6 +3374,28 @@ mod tests {
                     && outcomes.iter().all(|(next, probability)|
                         next.graveyard.contains(0) && (*probability - 0.5).abs() < f64::EPSILON)
         )));
+    }
+
+    #[test]
+    fn gitaxian_probe_casts_for_life_and_draws() {
+        let model = model(&["Gitaxian Probe", "Rhystic Study", "Blank"]);
+        let state = PackedStateV2 {
+            hand: [0].into_iter().collect(),
+            library: PackedLibrary::new([1, 2].into_iter().collect()),
+            ..PackedStateV2::default()
+        };
+        let mut out = SmallVec::new();
+        model.generate_gitaxian_probe(state, &mut out);
+        assert_eq!(out.len(), 1);
+        let InformationTransition::Chance(outcomes) = &out[0] else {
+            panic!("Probe draw must preserve hidden-library chance");
+        };
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes.iter().all(|(next, probability)| {
+            next.graveyard.contains(0)
+                && next.hand.len() == 1
+                && (*probability - 0.5).abs() < f64::EPSILON
+        }));
     }
 
     #[test]

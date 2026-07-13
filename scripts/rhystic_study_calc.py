@@ -277,6 +277,7 @@ def is_theoretical_rainbow_land(card: str) -> bool:
 LANDS = {
     "Ancient Tomb",
     "Arid Mesa",
+    "Badlands",
     "Bayou",
     "Boseiju, Who Endures",
     "Bloodstained Mire",

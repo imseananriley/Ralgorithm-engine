@@ -1958,6 +1958,9 @@ fn generate_fast_costed_strategic_actions(
     if hand_templates.contains(ActionTemplateMask::MANAMORPHOSE) {
         generate_fast_manamorphose_actions(ctx, actions, state);
     }
+    if hand_templates.contains(ActionTemplateMask::GITAXIAN_PROBE) {
+        generate_fast_gitaxian_probe_actions(ctx, actions, state);
+    }
     if hand_templates.contains(ActionTemplateMask::RAIN) {
         generate_fast_rain_actions(ctx, actions, state);
     }
@@ -2108,6 +2111,9 @@ fn generate_fast_strategic_actions_with_config(
     }
     if hand_templates.contains(ActionTemplateMask::MANAMORPHOSE) {
         generate_fast_manamorphose_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::GITAXIAN_PROBE) {
+        generate_fast_gitaxian_probe_actions(ctx, actions, state);
     }
     if hand_templates.contains(ActionTemplateMask::RAIN) {
         generate_fast_rain_actions(ctx, actions, state);
@@ -2732,6 +2738,26 @@ fn generate_fast_manamorphose_actions_for_cost(
             }
         }
     }
+}
+
+fn generate_fast_gitaxian_probe_actions(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+) {
+    let Some(card) = ctx.card_id("Gitaxian Probe") else {
+        return;
+    };
+    if !state.has_card(Some(card)) {
+        return;
+    }
+    let mut next = state.clone();
+    next.remove_hand_to_graveyard(ctx, card);
+    next = draw_card_fast(next);
+    actions.push(FastAction::new(
+        after_cast_fast(ctx, state, next),
+        label_priority_name("Gitaxian Probe"),
+    ));
 }
 
 fn generate_fast_dark_ritual_action(
@@ -4652,6 +4678,7 @@ pub(crate) fn is_land_card_name(card: &str) -> bool {
         card,
         "Ancient Tomb"
             | "Arid Mesa"
+            | "Badlands"
             | "Bayou"
             | "Boseiju, Who Endures"
             | "Bloodstained Mire"
@@ -4918,6 +4945,7 @@ pub(crate) fn card_color_mask(card: &str) -> u8 {
         "Flashback" => "R",
         "Gamble" => "R",
         "Gifts Ungiven" => "U",
+        "Gitaxian Probe" => "U",
         "Green Sun's Zenith" => "G",
         "Grim Tutor" => "B",
         "Heartwood Storyteller" => "G",
@@ -10608,6 +10636,23 @@ mod tests {
                     .collect::<Vec<_>>()
             );
         }
+    }
+
+    #[test]
+    fn gitaxian_probe_draws_known_top_without_mana() {
+        let mut context = FastContext::with_card_names(["Gitaxian Probe", "Rhystic Study"]);
+        let mut fixture = fixture_state(Vec::new());
+        fixture.hand = vec!["Gitaxian Probe".to_string()];
+        fixture.library = vec!["Rhystic Study".to_string()];
+        let state = FastState::from_fixture(&mut context, &fixture);
+        let probe = context.card_id("Gitaxian Probe").expect("Probe id");
+        let rhystic = context.card_id("Rhystic Study").expect("Rhystic id");
+        let actions = generate_fast_actions(&mut context, &state);
+        assert!(actions.iter().any(|action| {
+            !action.next_state.has_card(Some(probe))
+                && action.next_state.has_card(Some(rhystic))
+                && action.next_state.graveyard.contains(&probe)
+        }));
     }
 
     #[test]

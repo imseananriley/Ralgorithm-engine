@@ -1,0 +1,34 @@
+{
+  "hands": 10000,
+  "champion_hits": 3772,
+  "supplied_hits": 3684,
+  "champion_rate": 0.3772,
+  "supplied_rate": 0.3684,
+  "delta": -0.0088,
+  "delta_ci": [
+    -0.012483614524912862,
+    -0.005116385475087139
+  ],
+  "supplied_only": 133,
+  "champion_only": 221,
+  "both": 3551,
+  "neither": 6095,
+  "mcnemar_p": 3.3731543462078453e-06,
+  "champion_caps": 490,
+  "supplied_caps": 430,
+  "supplied_only_champion_capped": 21,
+  "champion_only_supplied_capped": 20,
+  "complete_case_hands": 9444,
+  "complete_case_supplied_only": 112,
+  "complete_case_champion_only": 201,
+  "complete_case_delta": -0.009423972892842017,
+  "complete_case_delta_ci": [
+    -0.013090725585598708,
+    -0.0057572202000853254
+  ],
+  "complete_case_mcnemar_p": 5.544874660913174e-07,
+  "champion_wall_seconds_sum": 170.4587258780375,
+  "supplied_wall_seconds_sum": 195.84927212283947,
+  "champion_cpu_seconds_sum": 493.52230099999997,
+  "supplied_cpu_seconds_sum": 556.1751820000001
+}
