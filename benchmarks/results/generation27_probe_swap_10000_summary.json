@@ -1,0 +1,35 @@
+{
+  "swap": "Swan Song -> Gitaxian Probe",
+  "hands": 10000,
+  "champion_hits": 3772,
+  "candidate_hits": 3867,
+  "champion_rate": 0.3772,
+  "candidate_rate": 0.3867,
+  "delta": 0.0095,
+  "delta_ci": [
+    0.007481165739272853,
+    0.011518834260727147
+  ],
+  "candidate_only": 101,
+  "champion_only": 6,
+  "both": 3766,
+  "neither": 6127,
+  "mcnemar_p": 2.3652503567112107e-23,
+  "champion_caps": 490,
+  "candidate_caps": 545,
+  "candidate_only_champion_capped": 10,
+  "champion_only_candidate_capped": 6,
+  "complete_case_hands": 9445,
+  "complete_case_candidate_only": 91,
+  "complete_case_champion_only": 0,
+  "complete_case_delta": 0.009634727368978295,
+  "complete_case_delta_ci": [
+    0.00766473507842214,
+    0.01160471965953445
+  ],
+  "complete_case_mcnemar_p": 8.077935669463161e-28,
+  "candidate_only_probe_visible": 83,
+  "champion_only_probe_visible": 3,
+  "candidate_wall_seconds_sum": 76.5434354597237,
+  "candidate_cpu_seconds_sum": 397.23818300000005
+}
