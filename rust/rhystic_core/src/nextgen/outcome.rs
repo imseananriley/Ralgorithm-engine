@@ -166,12 +166,18 @@ struct OpeningWitnessChoice<S> {
     is_chance: bool,
 }
 
+#[derive(Debug, Copy, Clone)]
+enum OpeningExistenceMemo<S> {
+    Failed,
+    Found(OpeningWitnessChoice<S>),
+}
+
 pub struct OpeningExistenceDiscrepancySolver<'a, M: OpeningOutcomeModel> {
     model: &'a M,
     action_candidate_limit: usize,
-    table: FxHashMap<(M::State, u8, u8), bool>,
-    choices: FxHashMap<(M::State, u8, u8), OpeningWitnessChoice<M::State>>,
+    table: FxHashMap<(M::State, u8, u8), OpeningExistenceMemo<M::State>>,
     visiting: FxHashSet<(M::State, u8, u8)>,
+    deterministic: FxHashSet<M::State>,
     metrics: SearchMetrics,
 }
 
@@ -184,8 +190,8 @@ where
             model,
             action_candidate_limit: action_candidate_limit.max(1),
             table: FxHashMap::default(),
-            choices: FxHashMap::default(),
             visiting: FxHashSet::default(),
+            deterministic: FxHashSet::default(),
             metrics: SearchMetrics::default(),
         }
     }
@@ -217,7 +223,9 @@ where
     ) -> Vec<OpeningWitnessTransition<M::State>> {
         let mut witness = Vec::new();
         while depth > 0 && self.model.terminal_opening_outcome(state).is_none() {
-            let Some(choice) = self.choices.get(&(state, depth, discrepancies)).copied() else {
+            let Some(OpeningExistenceMemo::Found(choice)) =
+                self.table.get(&(state, depth, discrepancies)).copied()
+            else {
                 break;
             };
             witness.push(OpeningWitnessTransition {
@@ -243,9 +251,9 @@ where
             return false;
         }
         let key = (state, depth, discrepancies);
-        if let Some(found) = self.table.get(&key) {
+        if let Some(memo) = self.table.get(&key) {
             self.metrics.transposition_hits += 1;
-            return *found;
+            return matches!(memo, OpeningExistenceMemo::Found(_));
         }
         if !self.visiting.insert(key) {
             self.metrics.cycle_cutoffs += 1;
@@ -256,9 +264,9 @@ where
         let mut transitions = SmallVec::new();
         self.model.transitions(state, &mut transitions);
         let generated = transitions.len();
-        let mut deterministic = FxHashSet::default();
+        self.deterministic.clear();
         transitions.retain(|transition| match transition {
-            InformationTransition::Deterministic(next) => deterministic.insert(*next),
+            InformationTransition::Deterministic(next) => self.deterministic.insert(*next),
             InformationTransition::Chance(_) => true,
         });
         transitions.sort_unstable_by_key(|transition| {
@@ -273,11 +281,14 @@ where
             self.action_candidate_limit
         };
         let mut selected = SmallVec::<[InformationTransition<M::State>; 8]>::new();
-        let mut seen_families = FxHashSet::default();
+        let mut seen_families = SmallVec::<[u64; 8]>::new();
         for transition in transitions {
             let family = self.model.transition_family(state, &transition);
-            if family.is_some_and(|family| !seen_families.insert(family)) {
-                continue;
+            if let Some(family) = family {
+                if seen_families.contains(&family) {
+                    continue;
+                }
+                seen_families.push(family);
             }
             selected.push(transition);
             if selected.len() == searched {
@@ -330,10 +341,10 @@ where
             }
         }
         self.visiting.remove(&key);
-        if let Some(choice) = chosen {
-            self.choices.insert(key, choice);
-        }
-        self.table.insert(key, found);
+        self.table.insert(
+            key,
+            chosen.map_or(OpeningExistenceMemo::Failed, OpeningExistenceMemo::Found),
+        );
         found
     }
 }

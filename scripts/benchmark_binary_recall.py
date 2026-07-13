@@ -180,29 +180,42 @@ def main() -> int:
     current_cpu = 0.0
     witness_status_by_game: dict[int, str] = {}
     raw_packed_hits: set[int] = set()
-    for budget in range(args.max_discrepancy + 1):
-        if not unresolved:
+    budgets = list(range(args.max_discrepancy + 1))
+    response, packed_wall, packed_cpu = invoke(
+        current_bin,
+        "opening-replay-jsonl",
+        {
+            "deck": deck,
+            "games": [replay_game(record, args.recorded_top) for record in unresolved],
+            "max_turn": 2,
+            "depth": args.depth,
+            "discrepancy_budgets": budgets,
+            "action_candidate_limit": args.action_candidates,
+            "workers": min(args.workers, len(unresolved)),
+            "existence_only": True,
+            "validate_witnesses": args.validate_witnesses,
+            "stop_after_confirmed_witness": True,
+            "include_witness_actions": False,
+        },
+    )
+    current_wall += packed_wall
+    current_cpu += packed_cpu
+    rows_by_budget = {
+        budget: [
+            (row, tier)
+            for row in response["games"]
+            for tier in row["tiers"]
+            if tier["discrepancy_budget"] == budget
+        ]
+        for budget in budgets
+    }
+    last_budget = max((budget for budget, rows in rows_by_budget.items() if rows), default=0)
+    for budget in budgets:
+        rows = rows_by_budget[budget]
+        if not rows:
             break
-        response, wall, cpu = invoke(
-            current_bin,
-            "opening-replay-jsonl",
-            {
-                "deck": deck,
-                "games": [replay_game(record, args.recorded_top) for record in unresolved],
-                "max_turn": 2,
-                "depth": args.depth,
-                "discrepancy_budgets": [budget],
-                "action_candidate_limit": args.action_candidates,
-                "workers": min(args.workers, len(unresolved)),
-                "existence_only": True,
-                "validate_witnesses": args.validate_witnesses,
-            },
-        )
-        current_wall += wall
-        current_cpu += cpu
         found = set()
-        for row in response["games"]:
-            tier = row["tiers"][0]
+        for row, tier in rows:
             if not tier["found"]:
                 continue
             raw_packed_hits.add(row["game_index"])
@@ -213,26 +226,29 @@ def main() -> int:
                 witness_status_by_game[row["game_index"]] = status
             if not args.validate_witnesses or status == "confirmed":
                 found.add(row["game_index"])
+        found.difference_update(current_hits)
         current_hits.update(found)
         unresolved = [record for record in unresolved if record["game_index"] not in found]
         recalled_old = len(current_hits & old_hits)
         tiers.append(
             {
                 "budget": budget,
-                "evaluated": len(response["games"]),
+                "evaluated": len(rows),
                 "new_hits": len(found),
                 "cumulative_hits": len(current_hits),
                 "old_hits_recalled": recalled_old,
                 "old_hits_missed": len(old_hits) - recalled_old,
-                "wall_seconds": wall,
-                "cpu_seconds": cpu,
+                "wall_seconds": packed_wall if budget == last_budget else 0.0,
+                "cpu_seconds": packed_cpu if budget == last_budget else 0.0,
+                "timing_scope": "shared_all_tiers",
             }
         )
         print(
-            f"[D={budget}] evaluated={len(response['games'])} new={len(found)} "
-            f"old_recall={recalled_old}/{len(old_hits)} wall={wall:.3f}s",
+            f"[D={budget}] evaluated={len(rows)} new={len(found)} "
+            f"old_recall={recalled_old}/{len(old_hits)}",
             flush=True,
         )
+    print(f"[packed shared] wall={packed_wall:.3f}s cpu={packed_cpu:.3f}s", flush=True)
 
     packed_hits = set(current_hits)
     witness_statuses: dict[str, int] = {}
@@ -264,7 +280,7 @@ def main() -> int:
                 old_request(record, args.rescue_initial_state_limit)
                 for record in unresolved
             ],
-            rescue_env,
+            {**(rescue_env or {}), "RALGORITHM_BATCH_WORKERS": str(args.workers)},
         )
         rescue["wall_seconds"] += wall
         rescue["cpu_seconds"] += cpu
@@ -283,7 +299,7 @@ def main() -> int:
                     old_request(unresolved[index], args.rescue_cap_state_limit)
                     for index in capped_indices
                 ],
-                rescue_env,
+                {**(rescue_env or {}), "RALGORITHM_BATCH_WORKERS": str(args.workers)},
             )
             rescue["wall_seconds"] += wall
             rescue["cpu_seconds"] += cpu

@@ -98,14 +98,32 @@ impl PersistentLibrary {
         if prefix < self.0.canonical.len() {
             let storage = self.0.canonical[prefix].get_or_init(|| {
                 let mut cards = self.0.cards.clone();
-                cards[prefix..].sort_unstable();
+                sort_card_ids(&mut cards[prefix..]);
                 Rc::new(LibraryStorage::new(cards))
             });
             return Self(storage.clone());
         }
         let mut cards = self.0.cards.clone();
-        cards[prefix..].sort_unstable();
+        sort_card_ids(&mut cards[prefix..]);
         Self::from(cards)
+    }
+}
+
+fn sort_card_ids(cards: &mut [CardId]) {
+    if cards.iter().any(|card| usize::from(*card) >= 256) {
+        cards.sort_unstable();
+        return;
+    }
+    let mut counts = [0u16; 256];
+    for card in cards.iter().copied() {
+        counts[usize::from(card)] += 1;
+    }
+    let mut output = 0;
+    for (card, count) in counts.into_iter().enumerate() {
+        for _ in 0..count {
+            cards[output] = card as CardId;
+            output += 1;
+        }
     }
 }
 
@@ -2366,14 +2384,15 @@ fn generate_fast_land_actions(
     if state.land_played() {
         return;
     }
-    for card in state.hand.iter().copied().collect::<Vec<_>>() {
+    let hand = state.hand.clone();
+    for card in hand {
         let flags = ctx.card_spec(card).flags;
         if !flags.contains(CardFlags::LAND) && !flags.contains(CardFlags::MDFC_LAND) {
             continue;
         }
         for (perm, library, grave_inc) in land_options_fast(ctx, card, &state.library) {
             let mut next = state.clone();
-            let city_indices: Vec<usize> = next
+            let city_indices: SmallVec<[usize; 2]> = next
                 .battlefield
                 .iter()
                 .enumerate()
@@ -2387,7 +2406,7 @@ fn generate_fast_land_actions(
             next.battlefield.push(perm);
             sort_fast_battlefield(ctx, &mut next.battlefield);
             next.remove_hand_card(card);
-            next.library = library.into();
+            next.library = library;
             next.set_flag(FastState::LAND_PLAYED, true);
             if grave_inc > 0 {
                 next.add_graveyard_card(ctx, card);
@@ -3176,14 +3195,15 @@ fn generate_fast_crop_rotation_actions(
                 if !state.library.contains_card(target) {
                     continue;
                 }
-                let target_removed_library = remove_first_card_vec(&state.library, target);
+                let target_removed_library =
+                    PersistentLibrary::from(remove_first_card_vec(&state.library, target));
                 for (target_perm, library, grave_inc) in
                     land_options_fast(ctx, target, &target_removed_library)
                 {
                     let base = sac_land_fast(ctx, state, land_index);
                     let mut next = base.clone();
                     next.remove_hand_to_graveyard(ctx, crop);
-                    next.library = library.into();
+                    next.library = library;
                     obscure_library_top_after_shuffle(ctx, &mut next.library);
                     next.push_perm(ctx, target_perm);
                     next.set_mana(mana);
@@ -4017,27 +4037,29 @@ fn artifact_count_fast(state: &FastState) -> usize {
 fn land_options_fast(
     ctx: &mut FastContext,
     card: CardId,
-    library: &[CardId],
-) -> Vec<(FastPerm, Vec<CardId>, u8)> {
+    library: &PersistentLibrary,
+) -> SmallVec<[(FastPerm, PersistentLibrary, u8); 8]> {
     let card_name = ctx.card_name(card).to_string();
     let flags = ctx.card_spec(card).flags;
     if flags.contains(CardFlags::MDFC_LAND) {
-        return vec![(
+        return smallvec::smallvec![(
             make_perm(ctx, FastPermKind::Land, false, color_mask("U"), false, 0),
-            library.to_vec(),
+            library.clone(),
             0,
         )];
     }
     if flags.contains(CardFlags::FETCH) {
-        let mut seen = BTreeSet::new();
-        let mut out = Vec::new();
-        for target in library {
+        let mut seen = SmallVec::<[CardId; 16]>::new();
+        let mut out = SmallVec::new();
+        for target in library.iter() {
             let target_name = ctx.card_name(*target).to_string();
-            if !seen.insert(*target) || !fetch_can_get_name(&card_name, &target_name) {
+            if seen.contains(target) || !fetch_can_get_name(&card_name, &target_name) {
                 continue;
             }
+            seen.push(*target);
             if let Some(colors) = land_type_color_mask(&target_name) {
-                let mut next_library = remove_first_card_vec(library, *target);
+                let mut next_library =
+                    PersistentLibrary::from(remove_first_card_vec(library, *target));
                 obscure_library_top_after_shuffle(ctx, &mut next_library);
                 out.push((
                     make_perm(ctx, FastPermKind::Land, false, colors, false, 0),
@@ -4094,7 +4116,7 @@ fn land_options_fast(
             }
         }
     };
-    vec![(perm, library.to_vec(), 0)]
+    smallvec::smallvec![(perm, library.clone(), 0)]
 }
 
 fn tutor_targets_fast(ctx: &FastContext, tutor: &str, state: &FastState) -> Vec<CardId> {
@@ -5052,7 +5074,7 @@ fn close_turn_fast_inner(
     let mut queue = start_states.clone();
     let mut seen_index = FastStateIndex::from_states(&start_states);
     let mut seen_order = start_states;
-    let mut best_mana: FxHashMap<FastState, Vec<Mana>> = FxHashMap::default();
+    let mut best_mana: FxHashMap<FastState, SmallVec<[Mana; 2]>> = FxHashMap::default();
     let mut hit_limit = false;
     while let Some(state) = queue.pop() {
         if let Some(label) = success_label_fast(ctx, request, &state) {
@@ -5112,7 +5134,7 @@ fn close_turn_trace_fast_inner(
     let mut seen_order = Vec::new();
     let mut start_paths: FxHashMap<FastState, Vec<String>> = FxHashMap::default();
     let mut parents: FxHashMap<FastState, (FastState, String)> = FxHashMap::default();
-    let mut best_mana: FxHashMap<FastState, Vec<Mana>> = FxHashMap::default();
+    let mut best_mana: FxHashMap<FastState, SmallVec<[Mana; 2]>> = FxHashMap::default();
     let mut hit_limit = false;
 
     for (state, path) in start_states {
@@ -5813,7 +5835,7 @@ fn can_cast_angels_grace_upkeep_fast(
     let cost = [0, 0, 0, 0, 1, 0];
     let mut queue = Vec::new();
     let mut seen = FxHashSet::default();
-    let mut best_mana: FxHashMap<FastState, Vec<Mana>> = FxHashMap::default();
+    let mut best_mana: FxHashMap<FastState, SmallVec<[Mana; 2]>> = FxHashMap::default();
     queue.push(state.clone());
     seen.insert(state.clone());
     while let Some(current) = queue.pop() {
@@ -5875,7 +5897,7 @@ fn pay_upkeep_options_fast(
     let start = normalize_upkeep_payment_state_fast(state, cost);
     let mut queue = Vec::new();
     let mut seen = FxHashSet::default();
-    let mut best_mana: FxHashMap<FastState, Vec<Mana>> = FxHashMap::default();
+    let mut best_mana: FxHashMap<FastState, SmallVec<[Mana; 2]>> = FxHashMap::default();
     let mut paid_states = Vec::new();
     queue.push(start.clone());
     seen.insert(start);
@@ -6039,8 +6061,8 @@ fn future_visible_setup_states_fast(ctx: &mut FastContext, state: &FastState) ->
         for (perm, library, grave_inc) in land_options_fast(ctx, card, &state.library) {
             let mut next = state.clone();
             next.remove_hand_card(card);
-            next.library = library.into();
-            let city_indices: Vec<usize> = next
+            next.library = library;
+            let city_indices: SmallVec<[usize; 2]> = next
                 .battlefield
                 .iter()
                 .enumerate()
@@ -6169,32 +6191,86 @@ pub fn solve_keep_trace_fast(request: &SolveKeepRequest) -> SolveKeepTraceFastRe
 }
 
 pub fn solve_keep_batch_fast(requests: &[SolveKeepRequest]) -> Vec<SolveKeepResponse> {
+    solve_keep_batch_fast_with_workers(requests, 1)
+}
+
+pub fn solve_keep_batch_fast_with_workers(
+    requests: &[SolveKeepRequest],
+    workers: usize,
+) -> Vec<SolveKeepResponse> {
+    if requests.is_empty() {
+        return Vec::new();
+    }
     let mut card_names = Vec::new();
     for request in requests {
         card_names.extend(request.hand.iter().cloned());
         card_names.extend(request.library.iter().cloned());
     }
-    let mut ctx = FastContext::with_card_names(card_names);
-    requests
-        .iter()
-        .map(|request| {
-            let config = FastSearchConfig::from_solve_request(request);
-            solve_keep_fast_with_ctx(
-                &mut ctx,
-                &request.hand,
-                &request.library,
-                request.gemstone_live,
-                request.state_limit,
-                request.max_turns,
-                &request.goal,
-                request.engine_target_count,
-                &request.engine_success_policy,
-                request.remora_upkeep_payments,
-                request.action_sort,
-                &config,
-            )
-        })
-        .collect()
+    let worker_count = workers.max(1).min(requests.len());
+    if worker_count == 1 {
+        let mut ctx = FastContext::with_card_names(card_names);
+        return requests
+            .iter()
+            .map(|request| {
+                let config = FastSearchConfig::from_solve_request(request);
+                solve_keep_fast_with_ctx(
+                    &mut ctx,
+                    &request.hand,
+                    &request.library,
+                    request.gemstone_live,
+                    request.state_limit,
+                    request.max_turns,
+                    &request.goal,
+                    request.engine_target_count,
+                    &request.engine_success_policy,
+                    request.remora_upkeep_payments,
+                    request.action_sort,
+                    &config,
+                )
+            })
+            .collect();
+    }
+
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut indexed = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            handles.push(scope.spawn(|| {
+                let mut ctx = FastContext::with_card_names(&card_names);
+                let mut local = Vec::new();
+                loop {
+                    let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(request) = requests.get(index) else {
+                        break;
+                    };
+                    let config = FastSearchConfig::from_solve_request(request);
+                    let response = solve_keep_fast_with_ctx(
+                        &mut ctx,
+                        &request.hand,
+                        &request.library,
+                        request.gemstone_live,
+                        request.state_limit,
+                        request.max_turns,
+                        &request.goal,
+                        request.engine_target_count,
+                        &request.engine_success_policy,
+                        request.remora_upkeep_payments,
+                        request.action_sort,
+                        &config,
+                    );
+                    local.push((index, response));
+                }
+                local
+            }));
+        }
+        let mut results = Vec::with_capacity(requests.len());
+        for handle in handles {
+            results.extend(handle.join().expect("fast batch worker panicked"));
+        }
+        results
+    });
+    indexed.sort_unstable_by_key(|(index, _)| *index);
+    indexed.into_iter().map(|(_, response)| response).collect()
 }
 
 pub fn earliest_fast(request: &EarliestRequest) -> SolveKeepResponse {
@@ -9899,7 +9975,7 @@ fn mana_dominated_fast(
     ctx: &FastContext,
     request: &CloseTurnRequest,
     state: &FastState,
-    best_mana: &mut FxHashMap<FastState, Vec<Mana>>,
+    best_mana: &mut FxHashMap<FastState, SmallVec<[Mana; 2]>>,
 ) -> bool {
     use std::collections::hash_map::Entry;
 
@@ -9908,7 +9984,7 @@ fn mana_dominated_fast(
     let existing = match best_mana.entry(key) {
         Entry::Occupied(entry) => entry.into_mut(),
         Entry::Vacant(entry) => {
-            entry.insert(vec![state_mana]);
+            entry.insert(smallvec::smallvec![state_mana]);
             return false;
         }
     };
@@ -10330,6 +10406,51 @@ mod tests {
         assert!(clone.contains_card(300));
         assert_eq!(&*library, &[1, 2, 3, 4, 300]);
         assert_eq!(&*clone, &[2, 3, 4, 300]);
+    }
+
+    #[test]
+    fn counting_card_sort_matches_full_u16_order() {
+        for mut cards in [
+            vec![7, 1, 3, 1, 255, 0, 42],
+            vec![300, 2, 1, 300, 0],
+            Vec::new(),
+        ] {
+            let mut expected = cards.clone();
+            expected.sort_unstable();
+            sort_card_ids(&mut cards);
+            assert_eq!(cards, expected);
+        }
+    }
+
+    #[test]
+    fn parallel_fast_batch_preserves_order_and_outcomes() {
+        let request = |hand: &[&str]| SolveKeepRequest {
+            hand: hand.iter().map(|card| (*card).to_string()).collect(),
+            library: ["Blank A", "Blank B", "Blank C"]
+                .map(str::to_string)
+                .to_vec(),
+            gemstone_live: false,
+            state_limit: 2_000,
+            max_turns: 1,
+            goal: "engine".to_string(),
+            engine_target_count: 1,
+            engine_success_policy: "resilient".to_string(),
+            remora_upkeep_payments: 2,
+            action_sort: true,
+            gamble_mode: None,
+            gamble_seed: None,
+            simplified_gamble: true,
+        };
+        let requests = vec![
+            request(&["Ancient Tomb", "Lotus Petal", "Rhystic Study"]),
+            request(&["Blank D", "Blank E", "Blank F"]),
+        ];
+        let serial = solve_keep_batch_fast_with_workers(&requests, 1);
+        let parallel = solve_keep_batch_fast_with_workers(&requests, 2);
+        assert_eq!(
+            serde_json::to_value(serial).expect("serial results serialize"),
+            serde_json::to_value(parallel).expect("parallel results serialize")
+        );
     }
 
     #[test]

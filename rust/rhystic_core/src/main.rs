@@ -9,7 +9,7 @@ use rhystic_core::{
         audit_rng_shuffle, bench_fast_action_fixtures, bench_fast_state_fixtures, close_turn_fast,
         earliest_fast, evaluate_policy_fast, evaluate_policy_threshold_sweep_fast,
         evaluate_raw_delta_fast, evaluate_raw_delta_fast_streaming,
-        evaluate_visible_hand_batch_fast, simulate_policy_fast, solve_keep_batch_fast,
+        evaluate_visible_hand_batch_fast, simulate_policy_fast, solve_keep_batch_fast_with_workers,
         solve_keep_fast, solve_keep_trace_fast,
     },
     fnv1a_seed, generate_fixture_action_cores, generate_fixture_actions, mana_bench_cases,
@@ -444,7 +444,11 @@ fn main() {
                         continue;
                     }
                 };
-                let responses = solve_keep_batch_fast(&requests);
+                let workers = std::env::var("RALGORITHM_BATCH_WORKERS")
+                    .ok()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(1);
+                let responses = solve_keep_batch_fast_with_workers(&requests, workers);
                 serde_json::to_writer(&mut stdout, &responses)
                     .expect("failed to write fast solve-keep batch JSON");
                 writeln!(stdout).expect("failed to write JSONL newline");

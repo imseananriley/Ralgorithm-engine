@@ -8,6 +8,10 @@ use super::{
     PackedStateV2, PermanentSource, SearchMetrics, SlotId, TokenKind,
 };
 
+const fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpeningReplayGame {
     pub game_index: u64,
@@ -47,6 +51,10 @@ pub struct OpeningReplayRequest {
     pub existence_only: bool,
     #[serde(default)]
     pub validate_witnesses: bool,
+    #[serde(default)]
+    pub stop_after_confirmed_witness: bool,
+    #[serde(default = "default_true")]
+    pub include_witness_actions: bool,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +137,8 @@ pub fn evaluate_opening_replay(
                     request.action_candidate_limit,
                     request.existence_only,
                     request.validate_witnesses,
+                    request.stop_after_confirmed_witness,
+                    request.include_witness_actions,
                 ) {
                     Ok(outcome) => outcomes.lock().expect("replay outcomes lock").push(outcome),
                     Err(message) => {
@@ -156,6 +166,8 @@ fn evaluate_game(
     action_candidate_limit: usize,
     existence_only: bool,
     validate_witnesses: bool,
+    stop_after_confirmed_witness: bool,
+    include_witness_actions: bool,
 ) -> Result<OpeningReplayGameOutcome, String> {
     let mut hand = CardMask::EMPTY;
     for name in &game.hand {
@@ -215,9 +227,9 @@ fn evaluate_game(
     };
     let pregame_states = model.pregame_states(state, game.gemstone_caverns_live);
     let mut tiers = Vec::with_capacity(discrepancy_budgets.len());
-    for &budget in discrepancy_budgets {
-        if existence_only {
-            let mut solver = OpeningExistenceDiscrepancySolver::new(model, action_candidate_limit);
+    if existence_only {
+        let mut solver = OpeningExistenceDiscrepancySolver::new(model, action_candidate_limit);
+        for &budget in discrepancy_budgets {
             let mut found = false;
             let mut metrics = SearchMetrics::default();
             let mut witness_validation = None;
@@ -227,12 +239,21 @@ fn evaluate_game(
                 if result.found {
                     found = true;
                     if validate_witnesses {
-                        witness_validation =
-                            Some(validate_full_library_witness(deck, game, &result.witness));
+                        witness_validation = Some(validate_full_library_witness(
+                            deck,
+                            game,
+                            &result.witness,
+                            include_witness_actions,
+                        ));
                     }
                     break;
                 }
             }
+            let accepted = found
+                && (!validate_witnesses
+                    || witness_validation.as_ref().is_some_and(|validation| {
+                        validation.status == OpeningWitnessValidationStatus::Confirmed
+                    }));
             tiers.push(OpeningReplayTierOutcome {
                 discrepancy_budget: budget,
                 found,
@@ -243,8 +264,20 @@ fn evaluate_game(
                 capped: false,
                 search_metrics: metrics,
             });
-            continue;
+            if stop_after_confirmed_witness && accepted {
+                break;
+            }
         }
+        return Ok(OpeningReplayGameOutcome {
+            game_index: game.game_index,
+            legacy_hit: game.legacy_hit,
+            legacy_capped: game.legacy_capped,
+            legacy_turn: game.legacy_turn,
+            legacy_engine_label: game.legacy_engine_label.clone(),
+            tiers,
+        });
+    }
+    for &budget in discrepancy_budgets {
         let mut solver = OpeningOutcomeDiscrepancySolver::new(model, action_candidate_limit);
         let mut best = OpeningOutcomeResult::default();
         for pregame in &pregame_states {
@@ -282,8 +315,13 @@ fn validate_full_library_witness(
     deck: &DeckSpec,
     game: &OpeningReplayGame,
     witness: &[OpeningWitnessTransition<PackedStateV2>],
+    include_actions: bool,
 ) -> OpeningWitnessValidation {
-    let actions = describe_witness(deck, witness);
+    let actions = if include_actions {
+        describe_witness(deck, witness)
+    } else {
+        Vec::new()
+    };
     if game.library_order.is_empty() || witness.is_empty() {
         return OpeningWitnessValidation {
             status: OpeningWitnessValidationStatus::Unavailable,
@@ -637,12 +675,20 @@ mod tests {
     #[test]
     fn full_library_witness_accepts_recorded_draw_and_rejects_mismatch() {
         let (deck, game, _engine, first, second) = validation_fixture();
-        let confirmed =
-            validate_full_library_witness(&deck, &game, &[draw_witness(first, second, first)]);
+        let confirmed = validate_full_library_witness(
+            &deck,
+            &game,
+            &[draw_witness(first, second, first)],
+            true,
+        );
         assert_eq!(confirmed.status, OpeningWitnessValidationStatus::Confirmed);
 
-        let invalid =
-            validate_full_library_witness(&deck, &game, &[draw_witness(first, second, second)]);
+        let invalid = validate_full_library_witness(
+            &deck,
+            &game,
+            &[draw_witness(first, second, second)],
+            true,
+        );
         assert_eq!(invalid.status, OpeningWitnessValidationStatus::Invalid);
     }
 
@@ -685,7 +731,8 @@ mod tests {
             is_chance: false,
         };
 
-        let validation = validate_full_library_witness(&deck, &game, &[search, draw, consume]);
+        let validation =
+            validate_full_library_witness(&deck, &game, &[search, draw, consume], true);
         assert_eq!(
             validation.status,
             OpeningWitnessValidationStatus::Probabilistic
@@ -746,6 +793,7 @@ mod tests {
             &deck,
             &game,
             &[revival, forced_draw, recorded_draw, consume],
+            true,
         );
         assert_eq!(validation.status, OpeningWitnessValidationStatus::Confirmed);
     }
@@ -787,6 +835,8 @@ mod tests {
             workers: 1,
             existence_only: false,
             validate_witnesses: false,
+            stop_after_confirmed_witness: false,
+            include_witness_actions: true,
         };
 
         let response = evaluate_opening_replay(&request).expect("replay");
@@ -883,6 +933,8 @@ mod tests {
             workers: 1,
             existence_only: false,
             validate_witnesses: false,
+            stop_after_confirmed_witness: false,
+            include_witness_actions: true,
         })
         .expect("deep recall replay");
 
