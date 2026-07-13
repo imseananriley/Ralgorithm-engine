@@ -14,8 +14,9 @@ success probability.
 
 ## Execution
 
-The initial monolithic packed pass completed, but aggregating 7,981 exact-rescue
-requests in one driver process exceeded the practical memory limit. The same
+The initial monolithic packed pass completed, but its exact-rescue phase did not
+produce a retained final response. That run was not instrumented sufficiently to
+distinguish memory pressure, process interruption, or driver failure. The same
 10,000 indexed games were therefore evaluated as ten disjoint 1,000-game shards.
 The retained aggregate contains 10,000 unique sample indices from 0 through
 9,999 with no duplicate successful index.
@@ -48,5 +49,5 @@ an unbiased correction sample.
 
 The driver now streams exact-rescue requests and results in bounded 1,000-hand
 chunks. A 100-hand chunk parity rerun reproduced every hit, witness status,
-rescue hit, and cap ID from shard zero. The Rust search scaled; the failed
-monolithic attempt was caused by driver-side aggregation, not search semantics.
+rescue hit, and cap ID from shard zero. This removes one plausible aggregation
+risk without claiming a cause that the failed monolithic run did not establish.

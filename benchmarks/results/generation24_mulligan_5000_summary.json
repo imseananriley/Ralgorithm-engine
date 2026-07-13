@@ -1,0 +1,18 @@
+{
+  "games": 5000,
+  "seed": 2027072201,
+  "estimand": "frozen mulligan-policy deterministic engine resolution by turn two",
+  "legacy_policy_hits": 3071,
+  "strict_deterministic_hits": 3017,
+  "strict_rate": 0.6034,
+  "wilson95": [0.589766142273683, 0.6168750969640794],
+  "final_caps": 228,
+  "upper_rate_if_all_caps_hit": 0.649,
+  "packed_confirmed": 1688,
+  "exact_rescue_hits": 1329,
+  "old_hits_recalled": 2991,
+  "old_hits_missed": 80,
+  "new_hits": 26,
+  "wall_seconds": 30.391132708871737,
+  "cpu_seconds": 118.788945
+}
