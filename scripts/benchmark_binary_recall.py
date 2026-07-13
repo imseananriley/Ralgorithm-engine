@@ -41,6 +41,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rescue-initial-state-limit", type=int, default=20_000)
     parser.add_argument("--rescue-cap-state-limit", type=int, default=60_000)
     parser.add_argument(
+        "--staged-exact-rescue",
+        action="store_true",
+        help="retain the diagnostic 20k pass before rerunning caps instead of one 60k pass",
+    )
+    parser.add_argument(
         "--validate-witnesses",
         action="store_true",
         help="count packed hits only when their witness validates against full library order",
@@ -273,11 +278,16 @@ def main() -> int:
             else None
         )
         rescue["evaluated"] = len(unresolved)
+        initial_limit = (
+            args.rescue_initial_state_limit
+            if args.staged_exact_rescue
+            else args.rescue_cap_state_limit
+        )
         exact_initial, wall, cpu = invoke(
             current_bin,
             "solve-keep-fast-batch-jsonl",
             [
-                old_request(record, args.rescue_initial_state_limit)
+                old_request(record, initial_limit)
                 for record in unresolved
             ],
             {**(rescue_env or {}), "RALGORITHM_BATCH_WORKERS": str(args.workers)},
@@ -285,13 +295,20 @@ def main() -> int:
         rescue["wall_seconds"] += wall
         rescue["cpu_seconds"] += cpu
         exact_final = list(exact_initial)
-        capped_indices = [
-            index
-            for index, outcome in enumerate(exact_initial)
-            if outcome.get("turn") is None and outcome.get("capped")
-        ]
-        rescue["initial_caps"] = len(capped_indices)
-        if capped_indices:
+        capped_indices = (
+            [
+                index
+                for index, outcome in enumerate(exact_initial)
+                if outcome.get("turn") is None and outcome.get("capped")
+            ]
+            if args.staged_exact_rescue
+            else []
+        )
+        rescue["mode"] = (
+            "staged" if args.staged_exact_rescue else "single_pass_max_limit"
+        )
+        rescue["initial_caps"] = len(capped_indices) if args.staged_exact_rescue else None
+        if args.staged_exact_rescue and capped_indices:
             reruns, wall, cpu = invoke(
                 current_bin,
                 "solve-keep-fast-batch-jsonl",
@@ -329,7 +346,8 @@ def main() -> int:
         current_cpu += rescue["cpu_seconds"]
         print(
             f"[exact rescue] evaluated={len(unresolved)} hits={len(rescue_hits)} "
-            f"caps={len(capped_indices)} wall={rescue['wall_seconds']:.3f}s",
+            f"final_caps={rescue['final_caps']} mode={rescue['mode']} "
+            f"wall={rescue['wall_seconds']:.3f}s",
             flush=True,
         )
 
