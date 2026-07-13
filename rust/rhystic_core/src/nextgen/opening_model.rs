@@ -484,7 +484,8 @@ impl EngineOpeningModel {
                 OpeningSpellKind::Gamble
                 | OpeningSpellKind::NoxiousRevival
                 | OpeningSpellKind::AnOfferYouCantRefuse
-                | OpeningSpellKind::GitaxianProbe => 250,
+                | OpeningSpellKind::GitaxianProbe
+                | OpeningSpellKind::StreetWraith => 250,
                 OpeningSpellKind::None => 0,
             },
             Some(OpeningCard::Creature(kind)) => match kind {
@@ -551,7 +552,9 @@ impl EngineOpeningModel {
                     | OpeningSpellKind::InfernalPlunge
                     | OpeningSpellKind::RainOfFilth
                     | OpeningSpellKind::EldritchEvolution => 2,
-                    OpeningSpellKind::AnOfferYouCantRefuse | OpeningSpellKind::GitaxianProbe => 2,
+                    OpeningSpellKind::AnOfferYouCantRefuse
+                    | OpeningSpellKind::GitaxianProbe
+                    | OpeningSpellKind::StreetWraith => 2,
                     OpeningSpellKind::None => 0,
                 },
                 Some(OpeningCard::Creature(kind)) => match kind {
@@ -1423,7 +1426,9 @@ impl EngineOpeningModel {
             Some(OpeningCard::Artifact(
                 OpeningArtifactKind::SolRing | OpeningArtifactKind::ManaVault,
             )) => Some([1, 0, 0, 0, 0, 0]),
-            Some(OpeningCard::Spell(OpeningSpellKind::SummonersPact)) => Some([0, 0, 0, 0, 0, 0]),
+            Some(OpeningCard::Spell(
+                OpeningSpellKind::SummonersPact | OpeningSpellKind::GitaxianProbe,
+            )) => Some([0, 0, 0, 0, 0, 0]),
             Some(OpeningCard::Spell(OpeningSpellKind::NoxiousRevival))
                 if !state.graveyard.is_empty() =>
             {
@@ -1696,6 +1701,36 @@ impl EngineOpeningModel {
                 Some(OpeningSpellKind::GitaxianProbe)
             )
         }) {
+            let mut next = state;
+            if !next.move_card(slot, Zone::Hand, Zone::Graveyard) {
+                continue;
+            }
+            let draws = self.chance_draws(next);
+            if draws.is_empty() {
+                out.push(InformationTransition::Deterministic(next));
+                continue;
+            }
+            let outcomes = draws
+                .into_iter()
+                .filter_map(|(drawn_slot, probability)| {
+                    let mut drawn = next;
+                    drawn.draw(drawn_slot).then_some((drawn, probability))
+                })
+                .collect();
+            out.push(InformationTransition::Chance(outcomes));
+        }
+    }
+
+    fn generate_street_wraith(
+        &self,
+        state: PackedStateV2,
+        out: &mut SmallVec<[InformationTransition<PackedStateV2>; 16]>,
+    ) {
+        for slot in state
+            .hand
+            .iter()
+            .filter(|slot| matches!(self.spell_kind(*slot), Some(OpeningSpellKind::StreetWraith)))
+        {
             let mut next = state;
             if !next.move_card(slot, Zone::Hand, Zone::Graveyard) {
                 continue;
@@ -2438,6 +2473,7 @@ impl InformationModel for EngineOpeningModel {
         out: &mut SmallVec<[InformationTransition<Self::State>; 16]>,
     ) {
         if state.flags & PRETURN_WINDOW != 0 {
+            self.generate_street_wraith(state, out);
             self.generate_rituals(state, out);
             self.generate_offer(state, out);
             self.generate_tutors(state, out);
@@ -2479,6 +2515,7 @@ impl InformationModel for EngineOpeningModel {
         self.generate_wishclaw_tutors(state, out);
         self.generate_manamorphose(state, out);
         self.generate_gitaxian_probe(state, out);
+        self.generate_street_wraith(state, out);
         self.generate_gamble(state, out);
         self.generate_noxious_revival(state, out);
         if self.resource_microsteps {
@@ -3296,6 +3333,33 @@ mod tests {
     }
 
     #[test]
+    fn offer_can_counter_gitaxian_probe_for_two_treasures() {
+        let model = model(&[
+            "An Offer You Can't Refuse",
+            "Gitaxian Probe",
+            "Command Tower",
+        ]);
+        let mut state = PackedStateV2 {
+            hand: [0, 1].into_iter().collect(),
+            ..PackedStateV2::default()
+        };
+        state
+            .battlefield
+            .insert(PermanentInstance::new(PermanentSource::card(2)));
+        let mut out = SmallVec::new();
+        model.generate_offer(state, &mut out);
+        assert!(out.iter().any(|transition| matches!(
+            transition,
+            InformationTransition::Deterministic(next)
+                if next.graveyard.contains(0)
+                    && next.graveyard.contains(1)
+                    && next.battlefield.as_slice().iter().filter(|permanent|
+                        permanent.source().token_kind() == Some(TokenKind::Treasure)
+                    ).count() == 2
+        )));
+    }
+
+    #[test]
     fn ranger_captain_has_fail_to_find_and_esper_search_branches() {
         let model = model(&["Ranger-Captain of Eos", "Esper Sentinel", "Blank"]);
         let state = PackedStateV2 {
@@ -3396,6 +3460,32 @@ mod tests {
                 && next.hand.len() == 1
                 && (*probability - 0.5).abs() < f64::EPSILON
         }));
+    }
+
+    #[test]
+    fn street_wraith_cycles_during_preturn_to_crack_tutor() {
+        let model = model(&[
+            "Gemstone Caverns",
+            "Vampiric Tutor",
+            "Street Wraith",
+            "Ancient Tomb",
+            "Lotus Petal",
+            "Blank",
+            "Rhystic Study",
+            "Blank library",
+        ]);
+        let state = PackedStateV2 {
+            hand: [0, 1, 2, 3, 4, 5].into_iter().collect(),
+            library: PackedLibrary::new([6, 7].into_iter().collect()),
+            ..PackedStateV2::default()
+        };
+        let value = model
+            .pregame_states(state, true)
+            .into_iter()
+            .filter(|start| start.exile.contains(5))
+            .map(|start| ReferenceSolver::new(&model).solve(start, 18).value)
+            .fold(0.0, f64::max);
+        assert_eq!(value, 1.0);
     }
 
     #[test]

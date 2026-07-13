@@ -23,7 +23,9 @@ MANA_CAP = 10
 ZERO_MANA = (0, 0, 0, 0, 0, 0)
 COLORS = "BRUWG"
 RHYSTIC_COST = (2, 0, 0, 1, 0, 0)  # generic, B, R, U, W, G
-DRAW_ORDER_MATTERS_CARDS = frozenset({"Gitaxian Probe", "Manamorphose", "Tataru Taru", "Wheel of Fortune"})
+DRAW_ORDER_MATTERS_CARDS = frozenset(
+    {"Gitaxian Probe", "Manamorphose", "Street Wraith", "Tataru Taru", "Wheel of Fortune"}
+)
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -396,6 +398,7 @@ CARD_COLORS = {
     "Flashback": "R",
     "Gamble": "R",
     "Gifts Ungiven": "U",
+    "Gitaxian Probe": "U",
     "Green Sun's Zenith": "G",
     "Grim Tutor": "B",
     "Heartwood Storyteller": "G",
@@ -445,6 +448,7 @@ CARD_COLORS = {
     "Smothering Tithe": "W",
     "Snapback": "U",
     "Storm-Kiln Artist": "R",
+    "Street Wraith": "B",
     "Strike It Rich": "R",
     "Subtlety": "U",
     "Sudden Substitution": "U",
@@ -557,6 +561,7 @@ MYSTICAL_TUTOR_TARGETS = {
     "Eldritch Evolution",
     "Enlightened Tutor",
     "Gitaxian Probe",
+    "Street Wraith",
     "Green Sun's Zenith",
     "Grim Tutor",
     "Idyllic Tutor",
@@ -582,11 +587,12 @@ WORLDLY_TUTOR_TARGETS = {
     "Tinder Wall",
     "Wild Cantor",
 }
-DRAW_ONE = {"Gitaxian Probe"}
+DRAW_ONE = {"Gitaxian Probe", "Street Wraith"}
 
 OFFER_COST = (0, 0, 0, 1, 0, 0)
 OFFER_COUNTERABLE_COSTS = {
     "Summoner's Pact": ((0, 0, 0, 0, 0, 0),),
+    "Gitaxian Probe": ((0, 0, 0, 0, 0, 0),),
     "Lotus Petal": ((0, 0, 0, 0, 0, 0),),
     "Chaos Emerald": ((0, 0, 0, 0, 0, 0),),
     "Chrome Mox": ((0, 0, 0, 0, 0, 0),),
@@ -1815,6 +1821,10 @@ class RhysticSearch:
         if "Gitaxian Probe" in hand_set:
             ns = self._draw(self._replace(state, hand=remove_card(state.hand, "Gitaxian Probe")))
             yield self._after_cast(state, ns), "cast Gitaxian Probe"
+
+        if "Street Wraith" in hand_set:
+            ns = self._draw(self._replace(state, hand=remove_card(state.hand, "Street Wraith")))
+            yield ns, "cycle Street Wraith"
 
         yield from self._offer_self_counter_actions(state)
 

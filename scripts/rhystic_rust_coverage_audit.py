@@ -110,6 +110,7 @@ ACTION_CARDS = {
     "Simian Spirit Guide": ("modeled", "free_mana", "exiles for R"),
     "Sol Ring": ("modeled", "mana_artifact", "casts for 1, taps for CC"),
     "Springleaf Drum": ("modeled", "mana_artifact", "casts for 1; taps any untapped creature for any color"),
+    "Street Wraith": ("modeled", "draw", "cycles for two life, including during the pre-turn priority window"),
     "Summoner's Pact": ("modeled", "creature_tutor", "finds Heartwood or supported green mana creatures with Pact survival check"),
     "The Cabbage Merchant": ("partial", "creature_body", "castable MV3 legendary green body; Food text not modeled"),
     "Tinder Wall": ("modeled", "mana_creature", "casts for G, sacrifices for RR"),

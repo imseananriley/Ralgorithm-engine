@@ -27,6 +27,10 @@ LABEL_ENGINE = {
 }
 
 PRESETS: dict[str, list[tuple[str, str]]] = {
+    "gas": [
+        ("Gitaxian Probe", "gas"),
+        ("Street Wraith", "gas"),
+    ],
     "fast": [
         ("Chrome Mox", "fast"),
         ("Lion's Eye Diamond", "fast"),
@@ -138,7 +142,13 @@ def unique_presets(names: list[str]) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     for preset in names:
         if preset == "all":
-            parts = PRESETS["fast"] + PRESETS["dorks"] + PRESETS["lands"] + PRESETS["tutors"]
+            parts = (
+                PRESETS["gas"]
+                + PRESETS["fast"]
+                + PRESETS["dorks"]
+                + PRESETS["lands"]
+                + PRESETS["tutors"]
+            )
         else:
             parts = PRESETS[preset]
         for card, category in parts:
@@ -537,7 +547,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--deck-json", default="data/moxfield_tPWeAfl5uXGJdejEnaIwYw_current_rain_over_mindbreak_20260701.json")
     parser.add_argument("--out-dir", default="data/rhystic_study_turn12/locked_mulligan_search")
-    parser.add_argument("--preset", action="append", choices=("fast", "dorks", "lands", "tutors", "all"), default=[])
+    parser.add_argument(
+        "--preset",
+        action="append",
+        choices=("gas", "fast", "dorks", "lands", "tutors", "all"),
+        default=[],
+    )
     parser.add_argument("--candidate", action="append", type=parse_candidate, default=[])
     parser.add_argument("--candidate-file", action="append", default=[])
     parser.add_argument("--shard-index", type=int, default=0)

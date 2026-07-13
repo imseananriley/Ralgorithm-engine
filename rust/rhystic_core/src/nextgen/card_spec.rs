@@ -73,6 +73,7 @@ impl ActionTemplateMask {
     pub const TOP_TUTOR: Self = Self(1 << 22);
     pub const GAMBLE: Self = Self(1 << 23);
     pub const GITAXIAN_PROBE: Self = Self(1 << 24);
+    pub const STREET_WRAITH: Self = Self(1 << 25);
 
     pub const fn contains(self, template: Self) -> bool {
         (self.0 & template.0) != 0
@@ -247,6 +248,7 @@ pub enum OpeningSpellKind {
     EldritchEvolution = 21,
     AnOfferYouCantRefuse = 22,
     GitaxianProbe = 23,
+    StreetWraith = 24,
 }
 
 fn opening_spell_kind(name: &str) -> OpeningSpellKind {
@@ -274,6 +276,7 @@ fn opening_spell_kind(name: &str) -> OpeningSpellKind {
         "Eldritch Evolution" => OpeningSpellKind::EldritchEvolution,
         "An Offer You Can't Refuse" => OpeningSpellKind::AnOfferYouCantRefuse,
         "Gitaxian Probe" => OpeningSpellKind::GitaxianProbe,
+        "Street Wraith" => OpeningSpellKind::StreetWraith,
         _ => OpeningSpellKind::None,
     }
 }
@@ -490,6 +493,7 @@ fn action_templates(name: &str, flags: CardFlags) -> ActionTemplateMask {
         | "Vampiric Tutor" | "Worldly Tutor" => templates.insert(ActionTemplateMask::TOP_TUTOR),
         "Gamble" => templates.insert(ActionTemplateMask::GAMBLE),
         "Gitaxian Probe" => templates.insert(ActionTemplateMask::GITAXIAN_PROBE),
+        "Street Wraith" => templates.insert(ActionTemplateMask::STREET_WRAITH),
         _ => {}
     }
     templates
@@ -651,6 +655,7 @@ fn is_creature(name: &str) -> bool {
             | "Ragavan, Nimble Pilferer"
             | "Ranger-Captain of Eos"
             | "Simian Spirit Guide"
+            | "Street Wraith"
             | "The Cabbage Merchant"
             | "Tinder Wall"
             | "Valley Floodcaller"

@@ -36,7 +36,6 @@ DEFAULT_ABSENT_TESTS = (
 DEFAULT_INTERACTION_STAND_IN = "Swan Song"
 COMMANDER_BANNED_OR_NOT_LEGAL = {
     "Chaos Emerald",
-    "Gitaxian Probe",
     "Jeweled Lotus",
 }
 

@@ -1961,6 +1961,9 @@ fn generate_fast_costed_strategic_actions(
     if hand_templates.contains(ActionTemplateMask::GITAXIAN_PROBE) {
         generate_fast_gitaxian_probe_actions(ctx, actions, state);
     }
+    if hand_templates.contains(ActionTemplateMask::STREET_WRAITH) {
+        generate_fast_street_wraith_actions(ctx, actions, state);
+    }
     if hand_templates.contains(ActionTemplateMask::RAIN) {
         generate_fast_rain_actions(ctx, actions, state);
     }
@@ -2114,6 +2117,9 @@ fn generate_fast_strategic_actions_with_config(
     }
     if hand_templates.contains(ActionTemplateMask::GITAXIAN_PROBE) {
         generate_fast_gitaxian_probe_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::STREET_WRAITH) {
+        generate_fast_street_wraith_actions(ctx, actions, state);
     }
     if hand_templates.contains(ActionTemplateMask::RAIN) {
         generate_fast_rain_actions(ctx, actions, state);
@@ -2757,6 +2763,26 @@ fn generate_fast_gitaxian_probe_actions(
     actions.push(FastAction::new(
         after_cast_fast(ctx, state, next),
         label_priority_name("Gitaxian Probe"),
+    ));
+}
+
+fn generate_fast_street_wraith_actions(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+) {
+    let Some(card) = ctx.card_id("Street Wraith") else {
+        return;
+    };
+    if !state.has_card(Some(card)) {
+        return;
+    }
+    let mut next = state.clone();
+    next.remove_hand_to_graveyard(ctx, card);
+    next = draw_card_fast(next);
+    actions.push(FastAction::new(
+        after_cast_fast(ctx, state, next),
+        label_priority_name("Street Wraith"),
     ));
 }
 
@@ -4289,7 +4315,7 @@ fn offer_bait_can_help(ctx: &FastContext, state: &FastState, bait: CardId) -> bo
 
 fn offer_counterable_costs(card: &str) -> Vec<Cost> {
     match card {
-        "Summoner's Pact" | "Lotus Petal" | "Chaos Emerald" | "Chrome Mox"
+        "Summoner's Pact" | "Gitaxian Probe" | "Lotus Petal" | "Chaos Emerald" | "Chrome Mox"
         | "Lion's Eye Diamond" | "Mox Amber" | "Mox Diamond" | "Mox Opal" | "Paradise Mantle"
         | "Noxious Revival" => vec![[0, 0, 0, 0, 0, 0]],
         "Sol Ring" | "Mana Vault" | "Springleaf Drum" => vec![[1, 0, 0, 0, 0, 0]],
@@ -4996,6 +5022,7 @@ pub(crate) fn card_color_mask(card: &str) -> u8 {
         "Smothering Tithe" => "W",
         "Snapback" => "U",
         "Storm-Kiln Artist" => "R",
+        "Street Wraith" => "B",
         "Strike It Rich" => "R",
         "Subtlety" => "U",
         "Sudden Substitution" => "U",
@@ -9816,7 +9843,7 @@ fn gemstone_caverns_alias_in_hand(ctx: &FastContext, state: &FastState) -> Optio
         .find(|card| state.has_card(Some(*card)))
 }
 
-fn preturn_caverns_top_tutor_states_fast(
+fn preturn_caverns_action_states_fast(
     ctx: &mut FastContext,
     state: &FastState,
 ) -> Vec<(FastState, String)> {
@@ -9828,6 +9855,14 @@ fn preturn_caverns_top_tutor_states_fast(
         return Vec::new();
     }
     let mut out = Vec::new();
+    if let Some(wraith) = ctx.card_id("Street Wraith") {
+        if state.has_card(Some(wraith)) {
+            let mut next = state.clone();
+            next.remove_hand_to_graveyard(ctx, wraith);
+            next = draw_card_fast(next);
+            out.push((next, "preturn cycle Street Wraith".to_string()));
+        }
+    }
     for tutor_name in [
         "Enlightened Tutor",
         "Mystical Tutor",
@@ -9840,14 +9875,44 @@ fn preturn_caverns_top_tutor_states_fast(
         if !state.has_card(Some(tutor)) {
             continue;
         }
+        let Some(cavern_index) = state
+            .battlefield
+            .iter()
+            .position(|perm| perm.kind_enum() == FastPermKind::Cavern && !perm.tapped())
+        else {
+            continue;
+        };
         for target in tutor_targets_fast(ctx, tutor_name, state) {
             let target_name = ctx.card_name(target).to_string();
             let mut next = state.clone();
             next.remove_hand_to_graveyard(ctx, tutor);
+            next.battlefield[cavern_index] = next.battlefield[cavern_index].with_tapped(true);
             next.library = known_top_library_after_shuffle(ctx, target, &state.library);
             next.set_mana([0, 0, 0, 0, 0, 0]);
             next.set_spells_this_turn(0);
             out.push((next, format!("preturn cast {tutor_name} for {target_name}")));
+        }
+    }
+    out
+}
+
+fn preturn_caverns_action_closure_fast(
+    ctx: &mut FastContext,
+    state: &FastState,
+) -> Vec<(FastState, Vec<String>)> {
+    let mut seen: FxHashSet<FastState> = FxHashSet::default();
+    seen.insert(state.clone());
+    let mut frontier = vec![(state.clone(), Vec::new())];
+    let mut out = Vec::new();
+    while let Some((current, path)) = frontier.pop() {
+        for (next, label) in preturn_caverns_action_states_fast(ctx, &current) {
+            if !seen.insert(next.clone()) {
+                continue;
+            }
+            let mut next_path = path.clone();
+            next_path.push(label);
+            out.push((next.clone(), next_path.clone()));
+            frontier.push((next, next_path));
         }
     }
     out
@@ -9912,9 +9977,9 @@ fn starting_state_options_fast(
         state.push_perm(ctx, cavern);
         out.push(state.clone());
         out.extend(
-            preturn_caverns_top_tutor_states_fast(ctx, &state)
+            preturn_caverns_action_closure_fast(ctx, &state)
                 .into_iter()
-                .map(|(next, _label)| next),
+                .map(|(next, _path)| next),
         );
     }
     out
@@ -9981,9 +10046,9 @@ fn starting_state_options_fast_with_trace(
         state.push_perm(ctx, cavern);
         let start_path = vec![format!("begin with {gemstone_name} exiling {exile_name}")];
         out.push((state.clone(), start_path.clone()));
-        for (next, label) in preturn_caverns_top_tutor_states_fast(ctx, &state) {
+        for (next, labels) in preturn_caverns_action_closure_fast(ctx, &state) {
             let mut path = start_path.clone();
-            path.push(label);
+            path.extend(labels);
             out.push((next, path));
         }
     }
@@ -10299,6 +10364,7 @@ fn library_order_matters(ctx: &FastContext, hand: &[CardId]) -> bool {
             "Gitaxian Probe"
                 | "Manamorphose"
                 | "Noxious Revival"
+                | "Street Wraith"
                 | "Tataru Taru"
                 | "Wheel of Fortune"
         )
@@ -10652,6 +10718,62 @@ mod tests {
             !action.next_state.has_card(Some(probe))
                 && action.next_state.has_card(Some(rhystic))
                 && action.next_state.graveyard.contains(&probe)
+        }));
+    }
+
+    #[test]
+    fn offer_can_counter_gitaxian_probe_for_treasures() {
+        let mut context = FastContext::with_card_names([
+            "An Offer You Can't Refuse",
+            "Gitaxian Probe",
+            "Command Tower",
+        ]);
+        let mut fixture = fixture_state(Vec::new());
+        fixture.hand = vec![
+            "An Offer You Can't Refuse".to_string(),
+            "Gitaxian Probe".to_string(),
+        ];
+        let mut state = FastState::from_fixture(&mut context, &fixture);
+        state.set_mana([0, 0, 1, 0, 0, 0]);
+        let offer = context
+            .card_id("An Offer You Can't Refuse")
+            .expect("Offer id");
+        let probe = context.card_id("Gitaxian Probe").expect("Probe id");
+        let mut actions = Vec::new();
+        generate_fast_offer_actions(&mut context, &mut actions, &state);
+        assert!(actions.iter().any(|action| {
+            action.next_state.graveyard.contains(&offer)
+                && action.next_state.graveyard.contains(&probe)
+                && action
+                    .next_state
+                    .battlefield
+                    .iter()
+                    .filter(|permanent| permanent.kind_enum() == FastPermKind::Treasure)
+                    .count()
+                    == 2
+        }));
+    }
+
+    #[test]
+    fn street_wraith_can_crack_a_preturn_caverns_tutor() {
+        let hand = vec![
+            "Gemstone Caverns".to_string(),
+            "Vampiric Tutor".to_string(),
+            "Street Wraith".to_string(),
+            "Ancient Tomb".to_string(),
+            "Lotus Petal".to_string(),
+            "Blank".to_string(),
+        ];
+        let library = vec!["Blank library".to_string(), "Rhystic Study".to_string()];
+        let mut context =
+            FastContext::with_card_names(hand.iter().chain(library.iter()).map(String::as_str));
+        let rhystic = context.card_id("Rhystic Study").expect("Rhystic id");
+        let wraith = context.card_id("Street Wraith").expect("Wraith id");
+        let states = starting_state_options_fast(&mut context, &hand, &library, true);
+        assert!(states.iter().any(|state| {
+            state.has_card(Some(rhystic))
+                && !state.has_card(Some(wraith))
+                && state.graveyard.contains(&wraith)
         }));
     }
 
