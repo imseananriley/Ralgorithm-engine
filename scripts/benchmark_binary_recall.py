@@ -40,6 +40,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--rescue-initial-state-limit", type=int, default=20_000)
     parser.add_argument("--rescue-cap-state-limit", type=int, default=60_000)
+    parser.add_argument("--rescue-chunk-size", type=int, default=1_000)
     parser.add_argument(
         "--staged-exact-rescue",
         action="store_true",
@@ -94,6 +95,31 @@ def invoke(
     if isinstance(response, dict) and response.get("error"):
         raise RuntimeError(response["error"])
     return response, wall, cpu
+
+
+def invoke_batches(
+    binary: Path,
+    command: str,
+    payloads: list[dict[str, Any]],
+    chunk_size: int,
+    extra_env: dict[str, str] | None = None,
+) -> tuple[list[Any], float, float]:
+    if chunk_size <= 0:
+        raise ValueError("rescue chunk size must be positive")
+    combined: list[Any] = []
+    wall_total = 0.0
+    cpu_total = 0.0
+    for start in range(0, len(payloads), chunk_size):
+        response, wall, cpu = invoke(
+            binary,
+            command,
+            payloads[start : start + chunk_size],
+            extra_env,
+        )
+        combined.extend(response)
+        wall_total += wall
+        cpu_total += cpu
+    return combined, wall_total, cpu_total
 
 
 def old_request(record: dict[str, Any], state_limit: int) -> dict[str, Any]:
@@ -283,13 +309,14 @@ def main() -> int:
             if args.staged_exact_rescue
             else args.rescue_cap_state_limit
         )
-        exact_initial, wall, cpu = invoke(
+        exact_initial, wall, cpu = invoke_batches(
             current_bin,
             "solve-keep-fast-batch-jsonl",
             [
                 old_request(record, initial_limit)
                 for record in unresolved
             ],
+            args.rescue_chunk_size,
             {**(rescue_env or {}), "RALGORITHM_BATCH_WORKERS": str(args.workers)},
         )
         rescue["wall_seconds"] += wall
@@ -309,13 +336,14 @@ def main() -> int:
         )
         rescue["initial_caps"] = len(capped_indices) if args.staged_exact_rescue else None
         if args.staged_exact_rescue and capped_indices:
-            reruns, wall, cpu = invoke(
+            reruns, wall, cpu = invoke_batches(
                 current_bin,
                 "solve-keep-fast-batch-jsonl",
                 [
                     old_request(unresolved[index], args.rescue_cap_state_limit)
                     for index in capped_indices
                 ],
+                args.rescue_chunk_size,
                 {**(rescue_env or {}), "RALGORITHM_BATCH_WORKERS": str(args.workers)},
             )
             rescue["wall_seconds"] += wall

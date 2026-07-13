@@ -1,0 +1,24 @@
+{
+  "games": 10000,
+  "seed": 2027072301,
+  "estimand": "raw seven-card hand deterministic engine resolution by turn two",
+  "hits": 3687,
+  "raw_hand_rate": 0.3687,
+  "wilson95": [0.3592962071272031, 0.3782046308449365],
+  "final_caps": 546,
+  "upper_rate_if_all_caps_hit": 0.4233,
+  "packed_confirmed": 2019,
+  "raw_packed_hits": 5748,
+  "exact_rescue_hits": 1668,
+  "witness_statuses": {
+    "confirmed": 2019,
+    "invalid": 442,
+    "probabilistic": 3287
+  },
+  "workers": 4,
+  "shards": 10,
+  "wall_seconds_sum": 95.93659304082394,
+  "cpu_seconds_sum": 364.207103,
+  "median_shard_wall": 9.550864791497588,
+  "games_per_wall_second": 104.23551309295189
+}
