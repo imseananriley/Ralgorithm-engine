@@ -1,0 +1,5 @@
+run,deck,games,state_cap,successes,success_rate,cap_misses,cap_upper_rate,rhystic_t1,rhystic_t2,heartwood_t1,heartwood_t2,weighted_score
+primary,Rograkh Silas,1000,60000,461,0.461,66,0.527,42,419,0,0,0.35625
+primary,Rograkh Thrasios,1000,60000,371,0.371,209,0.580,24,99,22,226,0.23795
+high_cap_sensitivity,Rograkh Silas,250,300000,117,0.468,3,0.480,8,109,0,0,0.35900
+high_cap_sensitivity,Rograkh Thrasios,250,300000,89,0.356,17,0.424,6,31,4,48,0.23380

@@ -137,6 +137,7 @@ def old_request(record: dict[str, Any], state_limit: int) -> dict[str, Any]:
         "gamble_mode": record.get("gamble_mode") or "stochastic",
         "gamble_seed": record.get("gamble_seed"),
         "simplified_gamble": record.get("simplified_gamble", True),
+        "commander": record.get("commander"),
     }
 
 
@@ -165,6 +166,9 @@ def main() -> int:
     corpus = json.loads(resolve(args.corpus).read_text())
     records = corpus["response"]["validation_records"]
     deck = corpus["request"]["deck"]
+    commander = corpus["request"].get("commander")
+    for record in records:
+        record.setdefault("commander", commander)
     prefork_bin = resolve(args.prefork_bin)
     current_bin = resolve(args.current_bin)
 
@@ -217,6 +221,7 @@ def main() -> int:
         "opening-replay-jsonl",
         {
             "deck": deck,
+            "commander": commander,
             "games": [replay_game(record, args.recorded_top) for record in unresolved],
             "max_turn": 2,
             "depth": args.depth,

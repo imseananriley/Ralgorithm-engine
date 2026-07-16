@@ -1,0 +1,17 @@
+# Every variant has exactly 8 fetchlands and 6 original dual lands.
+# Every included fetchland can access W, U, B, R, and G through those duals.
+base_lands_birds:Diabolic Intent=Birds of Paradise
+flooded_white_duals:Polluted Delta=Flooded Strand;Badlands=Plateau;Bayou=Savannah;Diabolic Intent=Birds of Paradise
+flooded_blue_duals:Marsh Flats=Flooded Strand;Badlands=Tropical Island;Bayou=Volcanic Island;Diabolic Intent=Birds of Paradise
+wooded_jeskai_duals:Verdant Catacombs=Wooded Foothills;Scrubland=Plateau;Underground Sea=Volcanic Island;Diabolic Intent=Birds of Paradise
+wooded_bant_duals:Bloodstained Mire=Wooded Foothills;Scrubland=Savannah;Underground Sea=Tropical Island;Diabolic Intent=Birds of Paradise
+flooded_wooded_a:Scalding Tarn=Flooded Strand;Windswept Heath=Wooded Foothills;Taiga=Savannah;Tundra=Volcanic Island;Diabolic Intent=Birds of Paradise
+flooded_wooded_b:Arid Mesa=Flooded Strand;Misty Rainforest=Wooded Foothills;Taiga=Plateau;Tundra=Tropical Island;Diabolic Intent=Birds of Paradise
+flooded_wooded_c:Scalding Tarn=Flooded Strand;Verdant Catacombs=Wooded Foothills;Badlands=Plateau;Taiga=Savannah;Underground Sea=Volcanic Island;Diabolic Intent=Birds of Paradise
+flooded_wooded_d:Polluted Delta=Flooded Strand;Windswept Heath=Wooded Foothills;Bayou=Plateau;Scrubland=Savannah;Tundra=Volcanic Island;Diabolic Intent=Birds of Paradise
+flooded_wooded_e:Marsh Flats=Flooded Strand;Scalding Tarn=Wooded Foothills;Badlands=Savannah;Tundra=Tropical Island;Underground Sea=Volcanic Island;Diabolic Intent=Birds of Paradise
+flooded_wooded_f:Marsh Flats=Flooded Strand;Misty Rainforest=Wooded Foothills;Bayou=Plateau;Tundra=Tropical Island;Underground Sea=Volcanic Island;Diabolic Intent=Birds of Paradise
+flooded_wooded_g:Bloodstained Mire=Flooded Strand;Windswept Heath=Wooded Foothills;Bayou=Savannah;Scrubland=Tropical Island;Taiga=Volcanic Island;Diabolic Intent=Birds of Paradise
+flooded_wooded_h:Bloodstained Mire=Flooded Strand;Misty Rainforest=Wooded Foothills;Bayou=Plateau;Taiga=Savannah;Underground Sea=Tropical Island;Diabolic Intent=Birds of Paradise
+flooded_wooded_i:Arid Mesa=Flooded Strand;Verdant Catacombs=Wooded Foothills;Badlands=Plateau;Scrubland=Tropical Island;Taiga=Volcanic Island;Diabolic Intent=Birds of Paradise
+flooded_wooded_j:Arid Mesa=Flooded Strand;Polluted Delta=Wooded Foothills;Badlands=Plateau;Scrubland=Savannah;Tundra=Tropical Island;Diabolic Intent=Birds of Paradise

@@ -186,6 +186,7 @@ fn canonical_card_name(name: &str) -> &str {
     }
     match name {
         "Zidane Tribal" => "Ragavan, Nimble Pilferer",
+        "Seymour Guado" => "Kinnan, Bonder Prodigy",
         _ => name,
     }
 }
@@ -206,10 +207,36 @@ pub struct FastContext {
     funding_cache_limit: usize,
     funding_frontier_limit: usize,
     funding_cache: FxHashMap<FastFundingCacheKey, Rc<[FastFundingNode]>>,
+    commander_kind: FastCommanderKind,
+    turbo_draw_engines: bool,
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+enum FastCommanderKind {
+    #[default]
+    NickFury,
+    Rograkh,
+    RograkhThrasios,
 }
 
 impl FastContext {
+    fn commander_identity_colors(&self) -> u8 {
+        match self.commander_kind {
+            FastCommanderKind::NickFury => color_mask("BRUWG"),
+            FastCommanderKind::Rograkh => color_mask("BRU"),
+            FastCommanderKind::RograkhThrasios => color_mask("RUG"),
+        }
+    }
+
     pub fn with_card_names<I, S>(names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self::with_card_names_and_commander(names, None)
+    }
+
+    pub fn with_card_names_and_commander<I, S>(names: I, commander: Option<&str>) -> Self
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
@@ -220,11 +247,28 @@ impl FastContext {
             .collect();
         unique.sort();
         unique.dedup();
-        let mut ctx = Self::default();
+        let mut ctx = Self {
+            commander_kind: match commander {
+                Some(value) if value.contains("Thrasios, Triton Hero") => {
+                    FastCommanderKind::RograkhThrasios
+                }
+                Some("Rograkh, Son of Rohgahh") => FastCommanderKind::Rograkh,
+                _ => FastCommanderKind::NickFury,
+            },
+            ..Self::default()
+        };
         ctx.strict_shuffle_hidden = strict_shuffle_hidden_enabled_from_env();
         ctx.payment_mode = payment_mode_from_env();
         ctx.funding_cache_limit = funding_cache_limit_from_env();
         ctx.funding_frontier_limit = funding_frontier_limit_from_env();
+        ctx.turbo_draw_engines = std::env::var("RALGORITHM_TURBO_DRAW_ENGINES")
+            .map(|value| {
+                !matches!(
+                    value.to_ascii_lowercase().as_str(),
+                    "0" | "false" | "no" | "off"
+                )
+            })
+            .unwrap_or(true);
         ctx.intern_common_strings();
         for name in unique {
             ctx.intern_card(&name);
@@ -340,6 +384,28 @@ pub enum FastPermKind {
     Bowmasters = 44,
     Cabbage = 45,
     Valley = 46,
+    Star = 47,
+    Grim = 48,
+    Talisman = 49,
+    Amulet = 50,
+    Bauble = 51,
+    Curse = 52,
+    Thrasios = 53,
+    Badgermole = 54,
+    Kinnan = 55,
+    Pollinator = 56,
+    StormKiln = 57,
+    DryadArbor = 58,
+    Cradle = 59,
+    BasicForest = 60,
+    ForestLand = 61,
+    Woodland = 62,
+    EarthbentLand = 63,
+    Cryptolith = 64,
+    Earthcraft = 65,
+    Shimmer = 66,
+    FetchLand = 67,
+    Breach = 68,
 }
 
 impl FastPermKind {
@@ -391,6 +457,28 @@ impl FastPermKind {
             "BOWMASTERS" => Self::Bowmasters,
             "CABBAGE" => Self::Cabbage,
             "VALLEY" => Self::Valley,
+            "STAR" => Self::Star,
+            "GRIM" => Self::Grim,
+            "TALISMAN" => Self::Talisman,
+            "AMULET" => Self::Amulet,
+            "BAUBLE" => Self::Bauble,
+            "CURSE" => Self::Curse,
+            "THRASIOS" => Self::Thrasios,
+            "BADGERMOLE" => Self::Badgermole,
+            "KINNAN" => Self::Kinnan,
+            "POLLINATOR" => Self::Pollinator,
+            "STORM_KILN" => Self::StormKiln,
+            "DRYAD_ARBOR" => Self::DryadArbor,
+            "CRADLE" => Self::Cradle,
+            "BASIC_FOREST" => Self::BasicForest,
+            "FOREST_LAND" => Self::ForestLand,
+            "WOODLAND" => Self::Woodland,
+            "EARTHBENT_LAND" => Self::EarthbentLand,
+            "CRYPTOLITH" => Self::Cryptolith,
+            "EARTHCRAFT" => Self::Earthcraft,
+            "SHIMMER" => Self::Shimmer,
+            "FETCH_LAND" => Self::FetchLand,
+            "BREACH" => Self::Breach,
             _ => Self::Unknown,
         }
     }
@@ -443,6 +531,28 @@ impl FastPermKind {
             44 => Self::Bowmasters,
             45 => Self::Cabbage,
             46 => Self::Valley,
+            47 => Self::Star,
+            48 => Self::Grim,
+            49 => Self::Talisman,
+            50 => Self::Amulet,
+            51 => Self::Bauble,
+            52 => Self::Curse,
+            53 => Self::Thrasios,
+            54 => Self::Badgermole,
+            55 => Self::Kinnan,
+            56 => Self::Pollinator,
+            57 => Self::StormKiln,
+            58 => Self::DryadArbor,
+            59 => Self::Cradle,
+            60 => Self::BasicForest,
+            61 => Self::ForestLand,
+            62 => Self::Woodland,
+            63 => Self::EarthbentLand,
+            64 => Self::Cryptolith,
+            65 => Self::Earthcraft,
+            66 => Self::Shimmer,
+            67 => Self::FetchLand,
+            68 => Self::Breach,
             _ => Self::Unknown,
         }
     }
@@ -496,6 +606,28 @@ impl FastPermKind {
             Self::Bowmasters => "BOWMASTERS",
             Self::Cabbage => "CABBAGE",
             Self::Valley => "VALLEY",
+            Self::Star => "STAR",
+            Self::Grim => "GRIM",
+            Self::Talisman => "TALISMAN",
+            Self::Amulet => "AMULET",
+            Self::Bauble => "BAUBLE",
+            Self::Curse => "CURSE",
+            Self::Thrasios => "THRASIOS",
+            Self::Badgermole => "BADGERMOLE",
+            Self::Kinnan => "KINNAN",
+            Self::Pollinator => "POLLINATOR",
+            Self::StormKiln => "STORM_KILN",
+            Self::DryadArbor => "DRYAD_ARBOR",
+            Self::Cradle => "CRADLE",
+            Self::BasicForest => "BASIC_FOREST",
+            Self::ForestLand => "FOREST_LAND",
+            Self::Woodland => "WOODLAND",
+            Self::EarthbentLand => "EARTHBENT_LAND",
+            Self::Cryptolith => "CRYPTOLITH",
+            Self::Earthcraft => "EARTHCRAFT",
+            Self::Shimmer => "SHIMMER",
+            Self::FetchLand => "FETCH_LAND",
+            Self::Breach => "BREACH",
         }
     }
 
@@ -510,6 +642,13 @@ impl FastPermKind {
                 | Self::Mine
                 | Self::Tower
                 | Self::Vein
+                | Self::DryadArbor
+                | Self::Cradle
+                | Self::BasicForest
+                | Self::ForestLand
+                | Self::Woodland
+                | Self::EarthbentLand
+                | Self::FetchLand
         )
     }
 
@@ -534,6 +673,14 @@ impl FastPermKind {
                 | Self::Bowmasters
                 | Self::Cabbage
                 | Self::Valley
+                | Self::Birgi
+                | Self::Thrasios
+                | Self::Badgermole
+                | Self::Kinnan
+                | Self::Pollinator
+                | Self::StormKiln
+                | Self::DryadArbor
+                | Self::EarthbentLand
         )
     }
 
@@ -547,6 +694,9 @@ impl FastPermKind {
                 | Self::Lotho
                 | Self::Ishai
                 | Self::Cabbage
+                | Self::Thrasios
+                | Self::Kinnan
+                | Self::Cradle
         )
     }
 
@@ -569,11 +719,26 @@ impl FastPermKind {
                 | Self::Drum
                 | Self::Relic
                 | Self::Esper
+                | Self::Star
+                | Self::Grim
+                | Self::Talisman
+                | Self::Amulet
+                | Self::Bauble
+                | Self::Pollinator
         )
     }
 
     fn is_enchantment(self) -> bool {
-        matches!(self, Self::EngineEnch | Self::Nature)
+        matches!(
+            self,
+            Self::EngineEnch
+                | Self::Nature
+                | Self::Curse
+                | Self::Cryptolith
+                | Self::Earthcraft
+                | Self::Shimmer
+                | Self::Breach
+        )
     }
 
     fn creature_mv(self) -> u8 {
@@ -590,7 +755,11 @@ impl FastPermKind {
             | Self::Ignoble
             | Self::Cantor => 1,
             Self::Tataru | Self::Lotho | Self::Wan | Self::Faerie | Self::Bowmasters => 2,
+            Self::Thrasios | Self::Badgermole | Self::Kinnan => 2,
+            Self::Pollinator => 1,
+            Self::DryadArbor | Self::EarthbentLand => 0,
             Self::Birgi | Self::Heartwood | Self::Cabbage | Self::Valley => 3,
+            Self::StormKiln => 4,
             Self::Ishai => 4,
             _ => 0,
         }
@@ -602,11 +771,13 @@ pub struct FastPerm(u32);
 
 impl FastPerm {
     const KIND_BITS: u32 = 0;
-    const TAPPED_BIT: u32 = 6;
-    const FRESH_BIT: u32 = 7;
-    const COLOR_BITS: u32 = 8;
-    const COUNTER_BITS: u32 = 14;
-    const EXTRA_BITS: u32 = 17;
+    const TAPPED_BIT: u32 = 7;
+    const FRESH_BIT: u32 = 8;
+    const EARTHBENT_BIT: u32 = 9;
+    const COLOR_BITS: u32 = 10;
+    const COUNTER_BITS: u32 = 16;
+    const EXTRA_BITS: u32 = 19;
+    const SHIMMER_COLOR_BITS: u32 = 29;
 
     pub fn new(
         kind: FastPermKind,
@@ -621,7 +792,7 @@ impl FastPerm {
         value |= (fresh as u32) << Self::FRESH_BIT;
         value |= ((colors & 0b11_1111) as u32) << Self::COLOR_BITS;
         value |= ((counters & 0b111) as u32) << Self::COUNTER_BITS;
-        value |= (extra_id as u32) << Self::EXTRA_BITS;
+        value |= ((extra_id as u32) & 0x03FF) << Self::EXTRA_BITS;
         Self(value)
     }
 
@@ -641,7 +812,7 @@ impl FastPerm {
     }
 
     pub fn kind(self) -> u8 {
-        ((self.0 >> Self::KIND_BITS) & 0b11_1111) as u8
+        ((self.0 >> Self::KIND_BITS) & 0b111_1111) as u8
     }
 
     pub fn kind_enum(self) -> FastPermKind {
@@ -656,6 +827,42 @@ impl FastPerm {
         ((self.0 >> Self::FRESH_BIT) & 1) != 0
     }
 
+    pub fn earthbent(self) -> bool {
+        ((self.0 >> Self::EARTHBENT_BIT) & 1) != 0
+    }
+
+    pub fn with_earthbent(self, earthbent: bool) -> Self {
+        let mut value = self.0;
+        if earthbent {
+            value |= 1 << Self::EARTHBENT_BIT;
+        } else {
+            value &= !(1 << Self::EARTHBENT_BIT);
+        }
+        Self(value)
+    }
+
+    pub fn with_fresh(self, fresh: bool) -> Self {
+        let mut value = self.0;
+        if fresh {
+            value |= 1 << Self::FRESH_BIT;
+        } else {
+            value &= !(1 << Self::FRESH_BIT);
+        }
+        Self(value)
+    }
+
+    pub fn shimmer_color(self) -> Option<usize> {
+        let encoded = ((self.0 >> Self::SHIMMER_COLOR_BITS) & 0b111) as usize;
+        (encoded != 0).then(|| encoded - 1)
+    }
+
+    pub fn with_shimmer_color(self, color: usize) -> Self {
+        debug_assert!(color < 5);
+        let mut value = self.0 & !(0b111 << Self::SHIMMER_COLOR_BITS);
+        value |= ((color + 1) as u32) << Self::SHIMMER_COLOR_BITS;
+        Self(value)
+    }
+
     pub fn colors(self) -> u8 {
         ((self.0 >> Self::COLOR_BITS) & 0b11_1111) as u8
     }
@@ -665,7 +872,7 @@ impl FastPerm {
     }
 
     pub fn extra_id(self) -> InternId {
-        (self.0 >> Self::EXTRA_BITS) as InternId
+        ((self.0 >> Self::EXTRA_BITS) & 0x03FF) as InternId
     }
 
     pub fn with_tapped(self, tapped: bool) -> Self {
@@ -759,6 +966,7 @@ pub struct FastState {
     pub engine_targets: u8,
     pub graveyard: SmallVec<[CardId; 16]>,
     pub hand: SmallVec<[CardId; 16]>,
+    pub jeska_exile: SmallVec<[CardId; 3]>,
     pub library: PersistentLibrary,
     pub mana: PackedMana,
     pub mantle_attached: SmallVec<[InternId; 2]>,
@@ -773,6 +981,12 @@ impl FastState {
     const NATURE_TAP_USED: u16 = 1 << 1;
     const NATURE_UNTAP_USED: u16 = 1 << 2;
     const RAIN_ACTIVE: u16 = 1 << 3;
+    const COMMANDER_CAST_SHIFT: u16 = 4;
+    const COMMANDER_CAST_MASK: u16 = 0b11 << Self::COMMANDER_CAST_SHIFT;
+    const CURSE_ACTIVE: u16 = 1 << 6;
+    const NECRO_PENDING: u16 = 1 << 7;
+    const SECONDARY_COMMANDER_CAST_SHIFT: u16 = 8;
+    const SECONDARY_COMMANDER_CAST_MASK: u16 = 0b11 << Self::SECONDARY_COMMANDER_CAST_SHIFT;
 
     pub fn from_fixture(ctx: &mut FastContext, state: &FixtureState) -> Self {
         let mut battlefield: SmallVec<[FastPerm; 16]> = state
@@ -842,6 +1056,7 @@ impl FastState {
             engine_targets,
             graveyard: SmallVec::new(),
             hand,
+            jeska_exile: SmallVec::new(),
             library,
             mana: PackedMana::from_mana(state.mana),
             mantle_attached,
@@ -860,7 +1075,14 @@ impl FastState {
     }
 
     pub fn canonicalize_irrelevant_library_tail(&mut self, ctx: &FastContext, max_turns: u8) {
-        if library_order_matters(ctx, &self.hand) {
+        let breach_can_freeze = self
+            .battlefield
+            .iter()
+            .any(|perm| perm.kind_enum() == FastPermKind::Breach)
+            && ctx
+                .card_id("Brain Freeze")
+                .is_some_and(|brain_freeze| self.graveyard.binary_search(&brain_freeze).is_ok());
+        if breach_can_freeze || library_order_matters(ctx, &self.hand) {
             return;
         }
         let turn = ((self.counters >> 12) & 0b1111) as u8;
@@ -935,7 +1157,7 @@ impl FastState {
 
     fn add_graveyard_card(&mut self, ctx: &FastContext, card: CardId) {
         let spec = ctx.card_spec(card);
-        if spec.flags.contains(CardFlags::LAND) || spec.flags.contains(CardFlags::MDFC_LAND) {
+        if spec.flags.contains(CardFlags::LAND) {
             self.add_land_grave(1);
         }
         match self.graveyard.binary_search(&card) {
@@ -949,7 +1171,7 @@ impl FastState {
         };
         self.graveyard.remove(index);
         let spec = ctx.card_spec(card);
-        if spec.flags.contains(CardFlags::LAND) || spec.flags.contains(CardFlags::MDFC_LAND) {
+        if spec.flags.contains(CardFlags::LAND) {
             self.set_land_grave_count(self.land_grave_count.saturating_sub(1));
         }
         true
@@ -964,17 +1186,35 @@ impl FastState {
     }
 
     fn move_hand_to_graveyard(&mut self, ctx: &FastContext) {
-        let cards: Vec<CardId> = self.hand.iter().copied().collect();
-        self.hand.clear();
+        let cards: Vec<CardId> = self
+            .hand
+            .iter()
+            .copied()
+            .filter(|card| !self.jeska_exile.contains(card))
+            .collect();
         for card in cards {
-            self.add_graveyard_card(ctx, card);
+            if self.remove_hand_card(card) {
+                self.add_graveyard_card(ctx, card);
+            }
+        }
+    }
+
+    fn is_jeska_exiled(&self, card: CardId) -> bool {
+        self.jeska_exile.contains(&card)
+    }
+
+    fn add_jeska_exile_card(&mut self, card: CardId) {
+        self.add_hand_card(card);
+        if !self.jeska_exile.contains(&card) {
+            self.jeska_exile.push(card);
+            self.jeska_exile.sort_unstable();
         }
     }
 
     fn exile_one_land_from_graveyard(&mut self, ctx: &FastContext) {
         if let Some(card) = self.graveyard.iter().copied().find(|card| {
             let spec = ctx.card_spec(*card);
-            spec.flags.contains(CardFlags::LAND) || spec.flags.contains(CardFlags::MDFC_LAND)
+            spec.flags.contains(CardFlags::LAND)
         }) {
             self.remove_graveyard_card(ctx, card);
         } else {
@@ -1018,6 +1258,30 @@ impl FastState {
         };
         self.library.remove(index);
         true
+    }
+
+    fn commander_cast_count(&self) -> u8 {
+        ((self.flags & Self::COMMANDER_CAST_MASK) >> Self::COMMANDER_CAST_SHIFT) as u8
+    }
+
+    fn record_commander_cast(&mut self) {
+        let casts = self.commander_cast_count().saturating_add(1).min(3);
+        self.flags = (self.flags & !Self::COMMANDER_CAST_MASK)
+            | (u16::from(casts) << Self::COMMANDER_CAST_SHIFT);
+    }
+
+    fn secondary_commander_cast_count(&self) -> u8 {
+        ((self.flags & Self::SECONDARY_COMMANDER_CAST_MASK) >> Self::SECONDARY_COMMANDER_CAST_SHIFT)
+            as u8
+    }
+
+    fn record_secondary_commander_cast(&mut self) {
+        let casts = self
+            .secondary_commander_cast_count()
+            .saturating_add(1)
+            .min(3);
+        self.flags = (self.flags & !Self::SECONDARY_COMMANDER_CAST_MASK)
+            | (u16::from(casts) << Self::SECONDARY_COMMANDER_CAST_SHIFT);
     }
 
     fn push_perm(&mut self, ctx: &FastContext, perm: FastPerm) {
@@ -1685,7 +1949,7 @@ fn fast_mana_source_groups(
         for (index, perm) in state.battlefield.iter().copied().enumerate() {
             if perm.tapped()
                 || perm.fresh()
-                || !perm.kind_enum().is_creature()
+                || (!perm.kind_enum().is_creature() && !perm.earthbent())
                 || mantle_key_fast(ctx, perm) != state.mantle_attached
             {
                 continue;
@@ -1853,6 +2117,14 @@ fn payment_cost_matches(filter: Option<Cost>, cost: Cost) -> bool {
 
 fn has_payable_costed_action(ctx: &FastContext, state: &FastState) -> bool {
     let mana = state.mana();
+    if state.graveyard.len() >= 4
+        && state
+            .battlefield
+            .iter()
+            .any(|perm| perm.kind_enum() == FastPermKind::Breach)
+    {
+        return true;
+    }
     if !state.land_played()
         && state
             .battlefield
@@ -1945,11 +2217,21 @@ fn generate_fast_costed_strategic_actions(
         generate_fast_engine_actions(ctx, actions, state);
     }
     generate_fast_commander_actions(ctx, actions, state);
+    generate_fast_thrasios_activation_actions(ctx, actions, state);
+    generate_fast_kinnan_activation_actions(ctx, actions, state);
+    generate_fast_shifting_woodland_actions(ctx, actions, state);
     if hand_templates.contains(ActionTemplateMask::ARTIFACT_SPELL) {
         generate_fast_artifact_spell_actions(ctx, actions, state);
     }
     if hand_templates.contains(ActionTemplateMask::CREATURE) {
         generate_fast_creature_actions(ctx, actions, state);
+    }
+    generate_fast_badgermole_actions(ctx, actions, state);
+    if hand_templates.contains(ActionTemplateMask::CREATURE_MANA_ENGINE) {
+        generate_fast_creature_mana_engine_actions(ctx, actions, state);
+    }
+    if hand_templates.contains(ActionTemplateMask::CREATURE_BATTLEFIELD_TUTOR) {
+        generate_fast_creature_battlefield_tutor_actions(ctx, actions, state);
     }
     generate_fast_mantle_equip_actions(ctx, actions, state);
     if hand_templates.contains(ActionTemplateMask::RITUAL) {
@@ -2001,6 +2283,7 @@ fn generate_fast_costed_strategic_actions(
     if hand_templates.contains(ActionTemplateMask::GAMBLE) {
         generate_fast_gamble_actions(ctx, actions, state, config);
     }
+    generate_fast_breach_escape_actions(ctx, actions, state, config);
 }
 
 fn generate_fast_costed_strategic_actions_for_cost(
@@ -2069,6 +2352,7 @@ fn generate_fast_costed_strategic_actions_for_cost(
     if matching_templates.contains(ActionTemplateMask::GAMBLE) {
         generate_fast_gamble_actions_for_cost(ctx, actions, state, config, Some(cost));
     }
+    generate_fast_breach_escape_actions(ctx, actions, state, config);
 }
 
 fn generate_fast_strategic_actions_with_config(
@@ -2121,6 +2405,10 @@ fn generate_fast_strategic_actions_with_config(
     if hand_templates.contains(ActionTemplateMask::STREET_WRAITH) {
         generate_fast_street_wraith_actions(ctx, actions, state);
     }
+    if hand_templates.contains(ActionTemplateMask::TURBO_OPENING) {
+        generate_fast_turbo_opening_actions(ctx, actions, state);
+    }
+    generate_fast_breach_escape_actions(ctx, actions, state, config);
     if hand_templates.contains(ActionTemplateMask::RAIN) {
         generate_fast_rain_actions(ctx, actions, state);
     }
@@ -2182,35 +2470,66 @@ fn generate_fast_mana_actions(
                         if counters <= 1 {
                             remove_perm_to_graveyard(ctx, &mut next, index);
                         } else {
-                            next.battlefield[index] =
-                                make_perm(ctx, FastPermKind::Mine, true, 0, false, counters - 1);
+                            next.battlefield[index] = preserve_perm_markers(
+                                make_perm(ctx, FastPermKind::Mine, true, 0, false, counters - 1),
+                                perm,
+                            );
                         }
-                        next.set_mana(add_mana(state.mana(), mana_for_color_index(color)));
+                        let produced = mana_with_tap_bonuses(
+                            state,
+                            perm,
+                            mana_for_color_index(color),
+                            perm.earthbent(),
+                        );
+                        next.set_mana(add_mana(state.mana(), produced));
                         sort_fast_battlefield(ctx, &mut next.battlefield);
                         actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
                     }
                     (_, FastTap::Vault) => {
                         next.battlefield[index] = perm.with_tapped(true);
-                        next.set_mana(add_mana(state.mana(), [0, 0, 0, 0, 0, 3]));
+                        let produced =
+                            mana_with_tap_bonuses(state, perm, [0, 0, 0, 0, 0, 3], false);
+                        next.set_mana(add_mana(state.mana(), produced));
                         sort_fast_battlefield(ctx, &mut next.battlefield);
                         actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
                     }
                     (FastPermKind::Deathrite, FastTap::Color(color)) => {
                         next.battlefield[index] = perm.with_tapped(true);
                         next.exile_one_land_from_graveyard(ctx);
-                        next.set_mana(add_mana(state.mana(), mana_for_color_index(color)));
+                        let produced =
+                            mana_with_tap_bonuses(state, perm, mana_for_color_index(color), true);
+                        next.set_mana(add_mana(state.mana(), produced));
                         sort_fast_battlefield(ctx, &mut next.battlefield);
                         actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
                     }
                     (_, FastTap::Color(color)) => {
                         next.battlefield[index] = perm.with_tapped(true);
-                        next.set_mana(add_mana(state.mana(), mana_for_color_index(color)));
+                        let own_creature_ability = matches!(
+                            kind,
+                            FastPermKind::Bird
+                                | FastPermKind::Noble
+                                | FastPermKind::Ignoble
+                                | FastPermKind::DryadArbor
+                        ) || perm.earthbent();
+                        let produced = mana_with_tap_bonuses(
+                            state,
+                            perm,
+                            mana_for_color_index(color),
+                            own_creature_ability,
+                        );
+                        next.set_mana(add_mana(state.mana(), produced));
                         sort_fast_battlefield(ctx, &mut next.battlefield);
                         actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
                     }
                     (_, FastTap::Colorless(amount)) => {
                         next.battlefield[index] = perm.with_tapped(true);
-                        next.set_mana(add_mana(state.mana(), [0, 0, 0, 0, 0, amount]));
+                        let produced = mana_with_tap_bonuses(
+                            state,
+                            perm,
+                            [0, 0, 0, 0, 0, amount],
+                            perm.earthbent(),
+                        );
+                        next.set_mana(add_mana(state.mana(), produced));
                         sort_fast_battlefield(ctx, &mut next.battlefield);
                         actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
                     }
@@ -2219,7 +2538,9 @@ fn generate_fast_mana_actions(
             if kind == FastPermKind::Vein {
                 let mut next = state.clone();
                 remove_land_perm_to_graveyard(ctx, &mut next, index);
-                next.set_mana(add_mana(state.mana(), [0, 0, 0, 0, 0, 2]));
+                let produced =
+                    mana_with_tap_bonuses(state, perm, [0, 0, 0, 0, 0, 2], perm.earthbent());
+                next.set_mana(add_mana(state.mana(), produced));
                 actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
             }
             if kind == FastPermKind::Tower {
@@ -2232,6 +2553,35 @@ fn generate_fast_mana_actions(
                     remove_perm_to_graveyard(ctx, &mut next, creature_index);
                     next.set_mana(add_mana(state.mana(), [2, 0, 0, 0, 0, 0]));
                     actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
+                }
+            }
+            if kind == FastPermKind::FetchLand {
+                let fetch_name = ctx.interned_string(perm.extra_id()).to_string();
+                let targets: Vec<CardId> = state
+                    .library
+                    .iter()
+                    .copied()
+                    .filter(|target| fetch_can_get_name(&fetch_name, ctx.card_name(*target)))
+                    .collect();
+                for target in targets {
+                    let target_removed_library =
+                        PersistentLibrary::from(remove_first_card_vec(&state.library, target));
+                    for (target_perm, library, grave_inc) in land_options_fast(
+                        ctx,
+                        target,
+                        &target_removed_library,
+                        controls_forest_fast(state),
+                    ) {
+                        let mut next = state.clone();
+                        remove_land_perm_to_graveyard(ctx, &mut next, index);
+                        next.library = library;
+                        obscure_library_top_after_shuffle(ctx, &mut next.library);
+                        next.push_perm(ctx, target_perm);
+                        next.set_land_grave_count(
+                            next.land_grave_count.saturating_add(grave_inc).min(7),
+                        );
+                        actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
+                    }
                 }
             }
         }
@@ -2270,7 +2620,9 @@ fn generate_fast_mana_actions(
                     let mut next = state.clone();
                     next.battlefield[index] = perm.with_tapped(true);
                     next.battlefield[creature_index] = creature.with_tapped(true);
-                    next.set_mana(add_mana(state.mana(), mana_for_color_index(color)));
+                    let produced =
+                        mana_with_tap_bonuses(state, perm, mana_for_color_index(color), false);
+                    next.set_mana(add_mana(state.mana(), produced));
                     sort_fast_battlefield(ctx, &mut next.battlefield);
                     actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
                 }
@@ -2294,7 +2646,7 @@ fn generate_fast_mana_actions(
         if !state.mantle_attached.is_empty()
             && !perm.tapped()
             && !perm.fresh()
-            && perm.kind_enum().is_creature()
+            && (perm.kind_enum().is_creature() || perm.earthbent())
             && state
                 .battlefield
                 .iter()
@@ -2304,7 +2656,9 @@ fn generate_fast_mana_actions(
             for color in 0..5 {
                 let mut next = state.clone();
                 next.battlefield[index] = perm.with_tapped(true);
-                next.set_mana(add_mana(state.mana(), mana_for_color_index(color)));
+                let produced =
+                    mana_with_tap_bonuses(state, perm, mana_for_color_index(color), true);
+                next.set_mana(add_mana(state.mana(), produced));
                 sort_fast_battlefield(ctx, &mut next.battlefield);
                 actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
             }
@@ -2314,13 +2668,166 @@ fn generate_fast_mana_actions(
             next.battlefield[index] = perm.with_tapped(true);
             let treasure = make_perm(ctx, FastPermKind::Treasure, false, 0, false, 0);
             next.push_perm(ctx, treasure);
+            if state.flag(FastState::CURSE_ACTIVE) {
+                next.push_perm(ctx, treasure);
+            }
             actions.push(FastAction::ragavan(next, DEFAULT_PRIORITY));
+        }
+        if kind == FastPermKind::Rog
+            && state.flag(FastState::CURSE_ACTIVE)
+            && !perm.tapped()
+            && !perm.fresh()
+        {
+            let mut next = state.clone();
+            next.battlefield[index] = perm.with_tapped(true);
+            let treasure = make_perm(ctx, FastPermKind::Treasure, false, 0, false, 0);
+            next.push_perm(ctx, treasure);
+            actions.push(FastAction::new(next, DEFAULT_PRIORITY));
+        }
+        if kind == FastPermKind::Star && !perm.tapped() {
+            for mana in pay_options(state.mana(), [1, 0, 0, 0, 0, 0]) {
+                for color in 0..5 {
+                    let mut next = state.clone();
+                    remove_perm_to_graveyard(ctx, &mut next, index);
+                    next.set_mana(add_mana(mana, mana_for_color_index(color)));
+                    next = draw_card_fast(next);
+                    actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
+                }
+            }
+        }
+        if kind == FastPermKind::Bauble && !perm.tapped() {
+            for mana in pay_options(state.mana(), [1, 0, 0, 0, 0, 0]) {
+                let mut next = state.clone();
+                remove_perm_to_graveyard(ctx, &mut next, index);
+                next.set_mana(mana);
+                next = draw_card_fast(next);
+                actions.push(FastAction::new(next, DEFAULT_PRIORITY));
+            }
+        }
+        if kind == FastPermKind::Amulet && !perm.tapped() {
+            if perm.counters() == 0 {
+                for color in 0..6 {
+                    let mut mana = state.mana();
+                    if mana[color] == 0 {
+                        continue;
+                    }
+                    mana[color] -= 1;
+                    let mut next = state.clone();
+                    next.battlefield[index] =
+                        make_perm(ctx, FastPermKind::Amulet, true, 1u8 << color, false, 1);
+                    next.set_mana(mana);
+                    sort_fast_battlefield(ctx, &mut next.battlefield);
+                    actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
+                }
+            } else {
+                for color in 0..6 {
+                    if (perm.colors() & (1u8 << color)) == 0 {
+                        continue;
+                    }
+                    let mut next = state.clone();
+                    next.battlefield[index] =
+                        make_perm(ctx, FastPermKind::Amulet, true, 0, false, 0);
+                    let add = if color < 5 {
+                        mana_for_color_index(color)
+                    } else {
+                        [0, 0, 0, 0, 0, 1]
+                    };
+                    let produced = mana_with_tap_bonuses(state, perm, add, false);
+                    next.set_mana(add_mana(state.mana(), produced));
+                    sort_fast_battlefield(ctx, &mut next.battlefield);
+                    actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
+                }
+            }
+        }
+        if kind == FastPermKind::Cradle && !perm.tapped() {
+            let creatures = creature_count_fast(state).min(15) as u8;
+            if creatures > 0 {
+                let mut next = state.clone();
+                next.battlefield[index] = perm.with_tapped(true);
+                let produced = mana_with_tap_bonuses(
+                    state,
+                    perm,
+                    [0, 0, 0, 0, creatures, 0],
+                    perm.earthbent(),
+                );
+                next.set_mana(add_mana(state.mana(), produced));
+                sort_fast_battlefield(ctx, &mut next.battlefield);
+                actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
+            }
+        }
+        if kind == FastPermKind::Pollinator && !perm.tapped() && !perm.fresh() {
+            for other_index in 0..state.battlefield.len() {
+                if other_index == index || state.battlefield[other_index].tapped() {
+                    continue;
+                }
+                for color in 0..5 {
+                    let mut next = state.clone();
+                    next.battlefield[index] = perm.with_tapped(true);
+                    next.battlefield[other_index] =
+                        state.battlefield[other_index].with_tapped(true);
+                    let produced =
+                        mana_with_tap_bonuses(state, perm, mana_for_color_index(color), true);
+                    next.set_mana(add_mana(state.mana(), produced));
+                    sort_fast_battlefield(ctx, &mut next.battlefield);
+                    actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
+                }
+            }
         }
         if state.rain_active() && kind.is_land() {
             let mut next = state.clone();
             remove_land_perm_to_graveyard(ctx, &mut next, index);
             next.set_mana(add_mana(state.mana(), [1, 0, 0, 0, 0, 0]));
             actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
+        }
+    }
+
+    if state
+        .battlefield
+        .iter()
+        .any(|perm| perm.kind_enum() == FastPermKind::Cryptolith)
+    {
+        for creature_index in unique_creature_indices(state) {
+            let creature = state.battlefield[creature_index];
+            if creature.tapped() || creature.fresh() {
+                continue;
+            }
+            for color in 0..5 {
+                let mut next = state.clone();
+                next.battlefield[creature_index] = creature.with_tapped(true);
+                let produced =
+                    mana_with_tap_bonuses(state, creature, mana_for_color_index(color), true);
+                next.set_mana(add_mana(state.mana(), produced));
+                sort_fast_battlefield(ctx, &mut next.battlefield);
+                actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
+            }
+        }
+    }
+
+    if state
+        .battlefield
+        .iter()
+        .any(|perm| perm.kind_enum() == FastPermKind::Earthcraft)
+    {
+        let tapped_forests: Vec<usize> = state
+            .battlefield
+            .iter()
+            .enumerate()
+            .filter_map(|(index, perm)| {
+                (perm.kind_enum() == FastPermKind::BasicForest && perm.tapped()).then_some(index)
+            })
+            .collect();
+        for forest_index in tapped_forests {
+            for creature_index in unique_creature_indices(state) {
+                let creature = state.battlefield[creature_index];
+                if creature_index == forest_index || creature.tapped() {
+                    continue;
+                }
+                let mut next = state.clone();
+                next.battlefield[forest_index] = state.battlefield[forest_index].with_tapped(false);
+                next.battlefield[creature_index] = creature.with_tapped(true);
+                sort_fast_battlefield(ctx, &mut next.battlefield);
+                actions.push(FastAction::new(next, MANA_ACTION_PRIORITY));
+            }
         }
     }
 }
@@ -2369,22 +2876,322 @@ fn generate_fast_commander_actions(
     actions: &mut Vec<FastAction>,
     state: &FastState,
 ) {
+    let primary = match ctx.commander_kind {
+        FastCommanderKind::NickFury => (FastPermKind::Nick, color_mask("W"), [0, 0, 0, 0, 1, 0]),
+        FastCommanderKind::Rograkh | FastCommanderKind::RograkhThrasios => {
+            (FastPermKind::Rog, color_mask("R"), [0, 0, 0, 0, 0, 0])
+        }
+    };
+    generate_fast_single_commander_action(ctx, actions, state, primary, false);
+    if matches!(ctx.commander_kind, FastCommanderKind::RograkhThrasios) {
+        generate_fast_single_commander_action(
+            ctx,
+            actions,
+            state,
+            (FastPermKind::Thrasios, color_mask("UG"), [0, 0, 0, 1, 0, 1]),
+            true,
+        );
+    }
+}
+
+fn generate_fast_single_commander_action(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+    (kind, colors, mut cost): (FastPermKind, u8, Cost),
+    secondary: bool,
+) {
+    if cost == [0, 0, 0, 0, 0, 0] && vexing_bauble_active(state) {
+        return;
+    }
     if state
         .battlefield
         .iter()
-        .any(|perm| perm.kind_enum() == FastPermKind::Nick)
+        .any(|perm| perm.kind_enum() == kind)
     {
         return;
     }
-    for mana in pay_options(state.mana(), [0, 0, 0, 0, 1, 0]) {
+    let casts = if secondary {
+        state.secondary_commander_cast_count()
+    } else {
+        state.commander_cast_count()
+    };
+    cost[0] = cost[0].saturating_add(casts.saturating_mul(2));
+    for mana in pay_options(state.mana(), cost) {
         let mut next = state.clone();
-        let nick = make_perm(ctx, FastPermKind::Nick, false, color_mask("W"), true, 0);
-        next.push_perm(ctx, nick);
+        let commander = make_perm(ctx, kind, false, colors, true, 0);
+        next.push_perm(ctx, commander);
         next.set_mana(mana);
+        if secondary {
+            next.record_secondary_commander_cast();
+        } else {
+            next.record_commander_cast();
+        }
         actions.push(FastAction::new(
             after_cast_fast(ctx, state, next),
             DEFAULT_PRIORITY,
         ));
+    }
+}
+
+fn generate_fast_thrasios_activation_actions(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+) {
+    if !state
+        .battlefield
+        .iter()
+        .any(|perm| perm.kind_enum() == FastPermKind::Thrasios)
+        || state.library.is_empty()
+    {
+        return;
+    }
+    for mana in pay_options(state.mana(), [4, 0, 0, 0, 0, 0]) {
+        let top = state.library[0];
+        let top_spec = ctx.card_spec(top);
+        let chrome_in_hand = ctx
+            .card_id("Chrome Mox")
+            .is_some_and(|chrome| state.has_card(Some(chrome)));
+        let top_has_opening_actions = top_spec.flags.contains(CardFlags::LAND)
+            || top_spec.flags.contains(CardFlags::MDFC_LAND)
+            || top_spec.action_templates != ActionTemplateMask::default();
+        let top_is_chrome_imprint = chrome_in_hand
+            && top_spec.color_mask != 0
+            && !top_spec.flags.contains(CardFlags::ARTIFACT);
+        let bottom_observed_top = !top_has_opening_actions && !top_is_chrome_imprint;
+
+        let mut next = state.clone();
+        next.set_mana(mana);
+        if bottom_observed_top && next.library.len() > 1 {
+            let card = next.library.remove(0);
+            next.library.push(card);
+        }
+        let revealed = next.library.remove(0);
+        if ctx.card_spec(revealed).flags.contains(CardFlags::LAND) {
+            let land = thrasios_revealed_land_fast(ctx, revealed);
+            next.push_perm(ctx, land.with_tapped(true));
+        } else {
+            next.add_hand_card(revealed);
+        }
+        actions.push(FastAction::new(next, DEFAULT_PRIORITY));
+    }
+}
+
+fn generate_fast_shifting_woodland_actions(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+) {
+    if graveyard_type_count_fast(ctx, state) < 4 {
+        return;
+    }
+    let Some(heartwood) = ctx.card_id("Heartwood Storyteller") else {
+        return;
+    };
+    if state.graveyard.binary_search(&heartwood).is_err() {
+        return;
+    }
+    for (index, woodland) in state.battlefield.iter().copied().enumerate() {
+        if woodland.kind_enum() != FastPermKind::Woodland {
+            continue;
+        }
+        for mana in pay_options(state.mana(), [2, 0, 0, 0, 0, 2]) {
+            let mut next = state.clone();
+            next.battlefield[index] = make_perm(
+                ctx,
+                FastPermKind::Heartwood,
+                woodland.tapped(),
+                color_mask("G"),
+                woodland.fresh(),
+                0,
+            );
+            next.set_mana(mana);
+            sort_fast_battlefield(ctx, &mut next.battlefield);
+            next = add_engine_fast(
+                ctx,
+                next,
+                engine_target_mask("CREATURE"),
+                "Heartwood Storyteller",
+            );
+            actions.push(FastAction::new(next, ENGINE_TUTOR_PRIORITY));
+        }
+    }
+}
+
+fn generate_fast_kinnan_activation_actions(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+) {
+    if !state
+        .battlefield
+        .iter()
+        .any(|perm| perm.kind_enum() == FastPermKind::Kinnan)
+        || state.library.is_empty()
+    {
+        return;
+    }
+    let looked: Vec<CardId> = state.library.iter().copied().take(5).collect();
+    let candidates: Vec<CardId> = looked
+        .iter()
+        .copied()
+        .filter(|card| is_kinnan_hit_fast(ctx.card_name(*card)))
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+    for mana in pay_options(state.mana(), [5, 0, 0, 1, 0, 1]) {
+        for target in &candidates {
+            let mut next = state.clone();
+            for card in &looked {
+                next.library.remove(0);
+                if card != target {
+                    next.library.push(*card);
+                }
+            }
+            next.set_mana(mana);
+            let target_name = ctx.card_name(*target).to_string();
+            if target_name == "Heartwood Storyteller" {
+                let heartwood = make_perm(
+                    ctx,
+                    FastPermKind::Heartwood,
+                    false,
+                    color_mask("G"),
+                    true,
+                    0,
+                );
+                next.push_perm(ctx, heartwood);
+                next = add_engine_fast(
+                    ctx,
+                    next,
+                    engine_target_mask("CREATURE"),
+                    "Heartwood Storyteller",
+                );
+                actions.push(FastAction::new(next, ENGINE_TUTOR_PRIORITY));
+                continue;
+            }
+            let perm = if target_name == "Dryad Arbor" {
+                make_perm(
+                    ctx,
+                    FastPermKind::DryadArbor,
+                    false,
+                    color_mask("G"),
+                    true,
+                    0,
+                )
+            } else {
+                creature_perm_fast(ctx, &target_name)
+            };
+            next.push_perm(ctx, perm);
+            if target_name == "Badgermole Cub" {
+                for earthbent in badgermole_earthbend_states(ctx, &next) {
+                    actions.push(FastAction::new(earthbent, FAST_MANA_PRIORITY));
+                }
+            } else {
+                actions.push(FastAction::new(next, FAST_MANA_PRIORITY));
+            }
+        }
+    }
+}
+
+fn is_kinnan_hit_fast(name: &str) -> bool {
+    matches!(
+        name,
+        "Badgermole Cub"
+            | "Birds of Paradise"
+            | "Birgi, God of Storytelling"
+            | "Clever Impersonator"
+            | "Dryad Arbor"
+            | "Elvish Spirit Guide"
+            | "Gene Pollinator"
+            | "Heartwood Storyteller"
+            | "Hydroelectric Specimen"
+            | "Mockingbird"
+            | "Ragavan, Nimble Pilferer"
+            | "Simian Spirit Guide"
+            | "Storm-Kiln Artist"
+            | "Subtlety"
+            | "Tinder Wall"
+            | "Valley Floodcaller"
+    )
+}
+
+fn graveyard_type_count_fast(ctx: &FastContext, state: &FastState) -> usize {
+    let mut types = 0u8;
+    for card in &state.graveyard {
+        let spec = ctx.card_spec(*card);
+        if spec.flags.contains(CardFlags::LAND) {
+            types |= 1 << 0;
+        }
+        if spec.flags.contains(CardFlags::CREATURE) {
+            types |= 1 << 1;
+        }
+        if spec.flags.contains(CardFlags::ARTIFACT) {
+            types |= 1 << 2;
+        }
+        if spec.flags.contains(CardFlags::ENCHANTMENT) {
+            types |= 1 << 3;
+        }
+        if is_sorcery_fast(ctx.card_name(*card)) {
+            types |= 1 << 4;
+        } else if is_instant_or_sorcery_fast(ctx.card_name(*card)) {
+            types |= 1 << 5;
+        }
+    }
+    types.count_ones() as usize
+}
+
+fn thrasios_revealed_land_fast(ctx: &mut FastContext, card: CardId) -> FastPerm {
+    let name = ctx.card_name(card).to_string();
+    if is_fetch_name(&name) {
+        let extra = ctx.intern_string(&name);
+        return FastPerm::new(FastPermKind::FetchLand, true, false, 0, 0, extra);
+    }
+    match name.as_str() {
+        "Ancient Tomb" => make_perm(ctx, FastPermKind::CcLand, true, 0, false, 0),
+        "City of Traitors" => make_perm(ctx, FastPermKind::City, true, 0, false, 0),
+        "Dryad Arbor" => make_perm(
+            ctx,
+            FastPermKind::DryadArbor,
+            true,
+            color_mask("G"),
+            true,
+            0,
+        ),
+        "Forest" => make_perm(
+            ctx,
+            FastPermKind::BasicForest,
+            true,
+            color_mask("G"),
+            false,
+            0,
+        ),
+        "Gaea's Cradle" => make_perm(ctx, FastPermKind::Cradle, true, color_mask("G"), false, 0),
+        "Shifting Woodland" => {
+            make_perm(ctx, FastPermKind::Woodland, true, color_mask("G"), false, 0)
+        }
+        "Command Tower" => {
+            let colors = ctx.commander_identity_colors();
+            make_perm(ctx, FastPermKind::Land, true, colors, false, 0)
+        }
+        "City of Brass" | "Mana Confluence" | "Starting Town" | "Tarnished Citadel" => {
+            make_perm(ctx, FastPermKind::Land, true, color_mask("BRUWG"), false, 0)
+        }
+        "Gemstone Caverns" => make_perm(ctx, FastPermKind::Cavern, true, 0, false, 0),
+        _ => {
+            let colors = land_type_color_mask(&name).unwrap_or_else(|| match name.as_str() {
+                "Boseiju, Who Endures" => color_mask("G"),
+                "Otawara, Soaring City" => color_mask("U"),
+                _ => color_mask("C"),
+            });
+            let kind = if matches!(name.as_str(), "Breeding Pool" | "Taiga" | "Tropical Island") {
+                FastPermKind::ForestLand
+            } else {
+                FastPermKind::Land
+            };
+            make_perm(ctx, kind, true, colors, false, 0)
+        }
     }
 }
 
@@ -2402,7 +3209,9 @@ fn generate_fast_land_actions(
         if !flags.contains(CardFlags::LAND) && !flags.contains(CardFlags::MDFC_LAND) {
             continue;
         }
-        for (perm, library, grave_inc) in land_options_fast(ctx, card, &state.library) {
+        for (perm, library, grave_inc) in
+            land_options_fast(ctx, card, &state.library, controls_forest_fast(state))
+        {
             let mut next = state.clone();
             let city_indices: SmallVec<[usize; 2]> = next
                 .battlefield
@@ -2433,6 +3242,9 @@ fn generate_fast_zero_artifact_actions(
     actions: &mut Vec<FastAction>,
     state: &FastState,
 ) {
+    if vexing_bauble_active(state) {
+        return;
+    }
     for (name, kind) in [
         ("Lotus Petal", FastPermKind::Petal),
         ("Lion's Eye Diamond", FastPermKind::Led),
@@ -2462,6 +3274,9 @@ fn generate_fast_chrome_mox_actions(
     actions: &mut Vec<FastAction>,
     state: &FastState,
 ) {
+    if vexing_bauble_active(state) {
+        return;
+    }
     let Some(chrome) = ctx.card_id("Chrome Mox") else {
         return;
     };
@@ -2469,6 +3284,9 @@ fn generate_fast_chrome_mox_actions(
         return;
     }
     for imprint in state.hand.iter().copied().collect::<Vec<_>>() {
+        if state.is_jeska_exiled(imprint) {
+            continue;
+        }
         let imprint_name = ctx.card_name(imprint).to_string();
         let imprint_spec = ctx.card_spec(imprint);
         let imprint_colors = imprint_spec.color_mask;
@@ -2494,6 +3312,9 @@ fn generate_fast_mox_diamond_actions(
     actions: &mut Vec<FastAction>,
     state: &FastState,
 ) {
+    if vexing_bauble_active(state) {
+        return;
+    }
     let Some(diamond) = ctx.card_id("Mox Diamond") else {
         return;
     };
@@ -2501,6 +3322,9 @@ fn generate_fast_mox_diamond_actions(
         return;
     }
     for land in state.hand.iter().copied().collect::<Vec<_>>() {
+        if state.is_jeska_exiled(land) {
+            continue;
+        }
         if !ctx.card_spec(land).flags.contains(CardFlags::LAND) {
             continue;
         }
@@ -2541,11 +3365,31 @@ fn generate_fast_artifact_spell_actions_for_cost(
             [1, 1, 0, 0, 0, 0],
         ),
         ("Springleaf Drum", FastPermKind::Drum, [1, 0, 0, 0, 0, 0]),
+        ("Chromatic Star", FastPermKind::Star, [1, 0, 0, 0, 0, 0]),
+        ("Defense Grid", FastPermKind::Artifact, [2, 0, 0, 0, 0, 0]),
+        ("Grim Monolith", FastPermKind::Grim, [2, 0, 0, 0, 0, 0]),
+        (
+            "Grinding Station",
+            FastPermKind::Artifact,
+            [2, 0, 0, 0, 0, 0],
+        ),
+        ("Jeweled Amulet", FastPermKind::Amulet, [0, 0, 0, 0, 0, 0]),
+        (
+            "Talisman of Dominance",
+            FastPermKind::Talisman,
+            [2, 0, 0, 0, 0, 0],
+        ),
+        ("Vexing Bauble", FastPermKind::Bauble, [1, 0, 0, 0, 0, 0]),
     ] {
         if !payment_cost_matches(cost_filter, cost) {
             continue;
         }
-        let perm = make_perm(ctx, kind, false, 0, false, 0);
+        let colors = if kind == FastPermKind::Signet {
+            ctx.commander_identity_colors()
+        } else {
+            0
+        };
+        let perm = make_perm(ctx, kind, false, colors, false, 0);
         cast_fast_cost_action(ctx, actions, state, name, perm, cost, FAST_MANA_PRIORITY);
     }
 }
@@ -2581,6 +3425,11 @@ fn generate_fast_creature_actions_for_cost(
         ("Tinder Wall", &[[0, 0, 0, 0, 0, 1]][..]),
         ("Valley Floodcaller", &[[2, 0, 0, 1, 0, 0]][..]),
         ("Wild Cantor", &[[0, 0, 1, 0, 0, 0], [0, 0, 0, 0, 0, 1]][..]),
+        ("Birgi, God of Storytelling", &[[2, 0, 1, 0, 0, 0]][..]),
+        ("Gene Pollinator", &[[0, 0, 0, 0, 0, 1]][..]),
+        ("Kinnan, Bonder Prodigy", &[[0, 0, 0, 1, 0, 1]][..]),
+        ("Storm-Kiln Artist", &[[3, 0, 1, 0, 0, 0]][..]),
+        ("Hydroelectric Specimen", &[[2, 0, 0, 1, 0, 0]][..]),
     ] {
         if !costs
             .iter()
@@ -2610,6 +3459,441 @@ fn generate_fast_creature_actions_for_cost(
                 ));
             }
         }
+    }
+}
+
+fn generate_fast_badgermole_actions(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+) {
+    let Some(card) = ctx.card_id("Badgermole Cub") else {
+        return;
+    };
+    if !state.has_card(Some(card)) {
+        return;
+    }
+    for mana in pay_options(state.mana(), [1, 0, 0, 0, 0, 1]) {
+        let land_indices: Vec<usize> = state
+            .battlefield
+            .iter()
+            .enumerate()
+            .filter_map(|(index, perm)| perm.kind_enum().is_land().then_some(index))
+            .collect();
+        if land_indices.is_empty() {
+            let mut next = state.clone();
+            next.remove_hand_card(card);
+            let badgermole = creature_perm_fast(ctx, "Badgermole Cub");
+            next.push_perm(ctx, badgermole);
+            next.set_mana(mana);
+            actions.push(FastAction::new(
+                after_cast_fast(ctx, state, next),
+                FAST_MANA_PRIORITY,
+            ));
+            continue;
+        }
+        for land_index in land_indices {
+            let mut next = state.clone();
+            next.remove_hand_card(card);
+            let land = next.battlefield[land_index];
+            next.battlefield[land_index] = land.with_tapped(land.tapped()).with_earthbent(true);
+            // Earthbend grants haste, including to a land played this turn.
+            next.battlefield[land_index] = next.battlefield[land_index].with_fresh(false);
+            let badgermole = creature_perm_fast(ctx, "Badgermole Cub");
+            next.push_perm(ctx, badgermole);
+            next.set_mana(mana);
+            sort_fast_battlefield(ctx, &mut next.battlefield);
+            actions.push(FastAction::new(
+                after_cast_fast(ctx, state, next),
+                FAST_MANA_PRIORITY,
+            ));
+        }
+    }
+}
+
+fn generate_fast_creature_mana_engine_actions(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+) {
+    for (name, kind) in [
+        ("Cryptolith Rite", FastPermKind::Cryptolith),
+        ("Earthcraft", FastPermKind::Earthcraft),
+    ] {
+        let Some(card) = ctx.card_id(name) else {
+            continue;
+        };
+        if !state.has_card(Some(card)) {
+            continue;
+        }
+        for mana in pay_options(state.mana(), [1, 0, 0, 0, 0, 1]) {
+            let mut next = state.clone();
+            next.remove_hand_card(card);
+            let perm = make_perm(ctx, kind, false, color_mask("G"), false, 0);
+            next.push_perm(ctx, perm);
+            next.set_mana(mana);
+            actions.push(FastAction::new(
+                after_cast_fast(ctx, state, next),
+                FAST_MANA_PRIORITY,
+            ));
+        }
+    }
+
+    if let Some(card) = ctx.card_id("Shimmerwilds Growth") {
+        if state.has_card(Some(card)) {
+            for mana in pay_options(state.mana(), [1, 0, 0, 0, 0, 1]) {
+                for land_index in 0..state.battlefield.len() {
+                    let land = state.battlefield[land_index];
+                    if !land.kind_enum().is_land() || land.shimmer_color().is_some() {
+                        continue;
+                    }
+                    for color in 0..5 {
+                        let mut next = state.clone();
+                        next.remove_hand_card(card);
+                        next.battlefield[land_index] = land.with_shimmer_color(color);
+                        next.set_mana(mana);
+                        sort_fast_battlefield(ctx, &mut next.battlefield);
+                        actions.push(FastAction::new(
+                            after_cast_fast(ctx, state, next),
+                            FAST_MANA_PRIORITY,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    let Some(card) = ctx.card_id("Mockingbird") else {
+        return;
+    };
+    if !state.has_card(Some(card)) {
+        return;
+    }
+    for x in 0..=4u8 {
+        let cost = [x, 0, 0, 1, 0, 0];
+        for mana in pay_options(state.mana(), cost) {
+            for target_index in unique_creature_indices(state) {
+                let target = state.battlefield[target_index];
+                if target.kind_enum().is_legendary()
+                    || target.kind_enum().creature_mv() > x.saturating_add(1)
+                {
+                    continue;
+                }
+                let mut next = state.clone();
+                next.remove_hand_card(card);
+                let copy = preserve_perm_markers(
+                    make_perm(
+                        ctx,
+                        target.kind_enum(),
+                        false,
+                        target.colors(),
+                        true,
+                        target.counters(),
+                    ),
+                    target,
+                );
+                next.push_perm(ctx, copy);
+                next.set_mana(mana);
+                next = after_cast_fast(ctx, state, next);
+                if target.kind_enum() == FastPermKind::Badgermole {
+                    for earthbent in badgermole_earthbend_states(ctx, &next) {
+                        actions.push(FastAction::new(earthbent, FAST_MANA_PRIORITY));
+                    }
+                } else {
+                    actions.push(FastAction::new(next, FAST_MANA_PRIORITY));
+                }
+            }
+        }
+    }
+}
+
+fn badgermole_earthbend_states(ctx: &FastContext, state: &FastState) -> Vec<FastState> {
+    let land_indices: Vec<usize> = state
+        .battlefield
+        .iter()
+        .enumerate()
+        .filter_map(|(index, perm)| {
+            (perm.kind_enum().is_land() && !perm.earthbent()).then_some(index)
+        })
+        .collect();
+    if land_indices.is_empty() {
+        return vec![state.clone()];
+    }
+    land_indices
+        .into_iter()
+        .map(|land_index| {
+            let mut next = state.clone();
+            let land = next.battlefield[land_index];
+            next.battlefield[land_index] = land.with_earthbent(true).with_fresh(false);
+            sort_fast_battlefield(ctx, &mut next.battlefield);
+            next
+        })
+        .collect()
+}
+
+fn generate_fast_creature_battlefield_tutor_actions(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+) {
+    for tutor_name in ["Finale of Devastation", "Nature's Rhythm"] {
+        let Some(tutor) = ctx.card_id(tutor_name) else {
+            continue;
+        };
+        if !state.has_card(Some(tutor)) {
+            continue;
+        }
+        for target in creature_battlefield_tutor_targets_fast(ctx, state, tutor_name) {
+            let x = creature_card_mv_fast(ctx.card_name(target));
+            let cost = [x, 0, 0, 0, 0, 2];
+            for mana in pay_options(state.mana(), cost) {
+                let mut base = state.clone();
+                base.remove_hand_to_graveyard(ctx, tutor);
+                base.set_mana(mana);
+                base = after_cast_fast(ctx, state, base);
+                for next in resolve_creature_battlefield_tutor_fast(
+                    ctx,
+                    &base,
+                    target,
+                    tutor_name == "Finale of Devastation",
+                ) {
+                    actions.push(FastAction::new(next, ENGINE_TUTOR_PRIORITY));
+                }
+            }
+        }
+    }
+
+    if let Some(tutor) = ctx.card_id("Chord of Calling") {
+        if state.has_card(Some(tutor)) {
+            for target in creature_battlefield_tutor_targets_fast(ctx, state, "Chord of Calling") {
+                let x = creature_card_mv_fast(ctx.card_name(target));
+                let cost = [x, 0, 0, 0, 0, 3];
+                for (remaining_cost, tapped_mask) in chord_convoke_plans_fast(state, cost) {
+                    for mana in pay_options(state.mana(), remaining_cost) {
+                        let mut base = state.clone();
+                        for index in 0..base.battlefield.len() {
+                            if tapped_mask & (1u32 << index) != 0 {
+                                base.battlefield[index] = base.battlefield[index].with_tapped(true);
+                            }
+                        }
+                        base.remove_hand_to_graveyard(ctx, tutor);
+                        base.set_mana(mana);
+                        sort_fast_battlefield(ctx, &mut base.battlefield);
+                        base = after_cast_fast(ctx, state, base);
+                        for next in
+                            resolve_creature_battlefield_tutor_fast(ctx, &base, target, false)
+                        {
+                            actions.push(FastAction::new(next, ENGINE_TUTOR_PRIORITY));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Harmonize is available only from the graveyard, costs XGGGG, may tap one
+    // creature for a generic reduction equal to that creature's power, and
+    // exiles Nature's Rhythm on resolution.
+    let Some(nature) = ctx.card_id("Nature's Rhythm") else {
+        return;
+    };
+    if state.graveyard.binary_search(&nature).is_err() {
+        return;
+    }
+    for target in creature_battlefield_tutor_targets_fast(ctx, state, "Nature's Rhythm") {
+        let x = creature_card_mv_fast(ctx.card_name(target));
+        let mut reductions = vec![(0usize, None)];
+        for index in unique_creature_indices(state) {
+            let creature = state.battlefield[index];
+            if !creature.tapped() {
+                reductions.push((creature_power_fast(creature) as usize, Some(index)));
+            }
+        }
+        for (reduction, tapped) in reductions {
+            let cost = [
+                x.saturating_sub(reduction.min(u8::MAX as usize) as u8),
+                0,
+                0,
+                0,
+                0,
+                4,
+            ];
+            for mana in pay_options(state.mana(), cost) {
+                let mut base = state.clone();
+                if let Some(index) = tapped {
+                    base.battlefield[index] = base.battlefield[index].with_tapped(true);
+                }
+                base.remove_graveyard_card(ctx, nature);
+                base.set_mana(mana);
+                sort_fast_battlefield(ctx, &mut base.battlefield);
+                base = after_cast_fast(ctx, state, base);
+                apply_known_noncreature_cast_triggers_fast(ctx, state, &mut base, true);
+                for next in resolve_creature_battlefield_tutor_fast(ctx, &base, target, false) {
+                    actions.push(FastAction::new(next, ENGINE_TUTOR_PRIORITY));
+                }
+            }
+        }
+    }
+}
+
+fn creature_battlefield_tutor_targets_fast(
+    ctx: &FastContext,
+    state: &FastState,
+    tutor_name: &str,
+) -> Vec<CardId> {
+    [
+        "Heartwood Storyteller",
+        "Badgermole Cub",
+        "Birds of Paradise",
+        "Dryad Arbor",
+        "Gene Pollinator",
+        "Kinnan, Bonder Prodigy",
+        "Tinder Wall",
+    ]
+    .iter()
+    .filter_map(|name| ctx.card_id(name))
+    .filter(|target| {
+        state.has_library_card(Some(*target))
+            || (tutor_name == "Finale of Devastation"
+                && state.graveyard.binary_search(target).is_ok())
+    })
+    .collect()
+}
+
+fn resolve_creature_battlefield_tutor_fast(
+    ctx: &mut FastContext,
+    state: &FastState,
+    target: CardId,
+    allow_graveyard: bool,
+) -> Vec<FastState> {
+    let mut next = state.clone();
+    if next.remove_library_card(target) {
+        obscure_library_top_after_shuffle(ctx, &mut next.library);
+    } else if !allow_graveyard || !next.remove_graveyard_card(ctx, target) {
+        return Vec::new();
+    }
+    let target_name = ctx.card_name(target).to_string();
+    if target_name == "Heartwood Storyteller" {
+        let heartwood = make_perm(
+            ctx,
+            FastPermKind::Heartwood,
+            false,
+            color_mask("G"),
+            true,
+            0,
+        );
+        next.push_perm(ctx, heartwood);
+        return vec![add_engine_fast(
+            ctx,
+            next,
+            engine_target_mask("CREATURE"),
+            "Heartwood Storyteller",
+        )];
+    }
+    let perm = if target_name == "Dryad Arbor" {
+        make_perm(
+            ctx,
+            FastPermKind::DryadArbor,
+            false,
+            color_mask("G"),
+            true,
+            0,
+        )
+    } else {
+        creature_perm_fast(ctx, &target_name)
+    };
+    next.push_perm(ctx, perm);
+    if target_name == "Badgermole Cub" {
+        return badgermole_earthbend_states(ctx, &next);
+    }
+    vec![next]
+}
+
+fn chord_convoke_plans_fast(state: &FastState, cost: Cost) -> Vec<(Cost, u32)> {
+    fn visit(
+        state: &FastState,
+        creatures: &[usize],
+        cursor: usize,
+        cost: Cost,
+        tapped: u32,
+        out: &mut Vec<(Cost, u32)>,
+    ) {
+        if cursor == creatures.len() {
+            out.push((cost, tapped));
+            return;
+        }
+        visit(state, creatures, cursor + 1, cost, tapped, out);
+        let index = creatures[cursor];
+        let creature = state.battlefield[index];
+        if creature.tapped() {
+            return;
+        }
+        if cost[0] > 0 {
+            let mut reduced = cost;
+            reduced[0] -= 1;
+            visit(
+                state,
+                creatures,
+                cursor + 1,
+                reduced,
+                tapped | (1u32 << index),
+                out,
+            );
+        }
+        if cost[5] > 0 && permanent_color_mask_fast(creature) & color_mask("G") != 0 {
+            let mut reduced = cost;
+            reduced[5] -= 1;
+            visit(
+                state,
+                creatures,
+                cursor + 1,
+                reduced,
+                tapped | (1u32 << index),
+                out,
+            );
+        }
+    }
+    let creatures = unique_creature_indices(state);
+    let mut out = Vec::new();
+    visit(state, &creatures, 0, cost, 0, &mut out);
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+fn permanent_color_mask_fast(perm: FastPerm) -> u8 {
+    if perm.kind_enum() == FastPermKind::DryadArbor {
+        return color_mask("G");
+    }
+    if perm.kind_enum().is_land() {
+        return perm.shimmer_color().map(|color| 1u8 << color).unwrap_or(0);
+    }
+    perm.colors()
+}
+
+fn creature_card_mv_fast(name: &str) -> u8 {
+    match name {
+        "Dryad Arbor" => 0,
+        "Birds of Paradise" | "Gene Pollinator" | "Tinder Wall" => 1,
+        "Badgermole Cub" | "Kinnan, Bonder Prodigy" => 2,
+        "Heartwood Storyteller" => 3,
+        _ => 0,
+    }
+}
+
+fn creature_power_fast(perm: FastPerm) -> u8 {
+    if perm.earthbent() {
+        return 1;
+    }
+    match perm.kind_enum() {
+        FastPermKind::Badgermole => 2,
+        FastPermKind::Kinnan => 2,
+        FastPermKind::Pollinator => 1,
+        FastPermKind::Thrasios => 1,
+        FastPermKind::Ragavan => 2,
+        FastPermKind::Birgi => 3,
+        FastPermKind::StormKiln => 2,
+        _ => 0,
     }
 }
 
@@ -2679,6 +3963,7 @@ fn generate_fast_ritual_actions_for_cost(
     for (name, cost, add) in [
         ("Dark Ritual", [0, 1, 0, 0, 0, 0], [3, 0, 0, 0, 0, 0]),
         ("Rite of Flame", [0, 0, 1, 0, 0, 0], [0, 2, 0, 0, 0, 0]),
+        ("Cabal Ritual", [1, 1, 0, 0, 0, 0], [3, 0, 0, 0, 0, 0]),
     ] {
         if !payment_cost_matches(cost_filter, cost) {
             continue;
@@ -2699,6 +3984,492 @@ fn generate_fast_ritual_actions_for_cost(
             ));
         }
     }
+    if state.graveyard.len() >= 7 {
+        if let Some(card) = ctx.card_id("Cabal Ritual") {
+            if state.has_card(Some(card)) {
+                for mana in pay_options(state.mana(), [1, 1, 0, 0, 0, 0]) {
+                    let mut next = state.clone();
+                    next.remove_hand_to_graveyard(ctx, card);
+                    next.set_mana(add_mana(mana, [5, 0, 0, 0, 0, 0]));
+                    actions.push(FastAction::new(
+                        after_cast_fast(ctx, state, next),
+                        DEFAULT_PRIORITY,
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn generate_fast_turbo_opening_actions(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+) {
+    let rhystic = ctx.card_id("Rhystic Study");
+
+    if let Some(card) = ctx.card_id("Borne Upon a Wind") {
+        if state.has_card(Some(card)) {
+            for mana in pay_options(state.mana(), [1, 0, 0, 1, 0, 0]) {
+                let mut next = state.clone();
+                next.remove_hand_to_graveyard(ctx, card);
+                next = draw_card_fast(next);
+                next.set_mana(mana);
+                actions.push(FastAction::new(
+                    after_cast_fast(ctx, state, next),
+                    DEFAULT_PRIORITY,
+                ));
+            }
+        }
+    }
+
+    if let Some(card) = ctx.card_id("Underworld Breach") {
+        if state.has_card(Some(card)) {
+            for mana in pay_options(state.mana(), [1, 0, 1, 0, 0, 0]) {
+                let mut next = state.clone();
+                next.remove_hand_card(card);
+                let breach = make_perm(ctx, FastPermKind::Breach, false, color_mask("R"), false, 0);
+                next.push_perm(ctx, breach);
+                next.set_mana(mana);
+                actions.push(FastAction::new(
+                    after_cast_fast(ctx, state, next),
+                    DEFAULT_PRIORITY,
+                ));
+            }
+        }
+    }
+
+    generate_fast_brain_freeze_actions(ctx, actions, state);
+
+    // Tainted Pact is deterministic in this singleton library. Consultation fails
+    // when the named card is among the mandatory first six exiles.
+    for (name, cost, skip) in [
+        ("Tainted Pact", [1, 1, 0, 0, 0, 0], 0usize),
+        ("Demonic Consultation", [0, 1, 0, 0, 0, 0], 6usize),
+    ] {
+        let Some(rhystic) = rhystic else {
+            continue;
+        };
+        let Some(card) = ctx.card_id(name) else {
+            continue;
+        };
+        if !state.has_card(Some(card)) {
+            continue;
+        }
+        let Some(position) = state
+            .library
+            .iter()
+            .position(|candidate| *candidate == rhystic)
+        else {
+            continue;
+        };
+        if position < skip {
+            continue;
+        }
+        for mana in pay_options(state.mana(), cost) {
+            let mut next = state.clone();
+            next.remove_hand_to_graveyard(ctx, card);
+            for _ in 0..position {
+                if !next.library.is_empty() {
+                    next.library.remove(0);
+                }
+            }
+            next.remove_library_card(rhystic);
+            next.add_hand_card(rhystic);
+            next.set_mana(mana);
+            actions.push(FastAction::new(
+                after_cast_fast(ctx, state, next),
+                ENGINE_TUTOR_PRIORITY,
+            ));
+        }
+    }
+
+    for (name, cost) in [
+        ("Wheel of Fortune", [2, 0, 1, 0, 0, 0]),
+        ("Windfall", [2, 0, 0, 1, 0, 0]),
+    ] {
+        let Some(card) = ctx.card_id(name) else {
+            continue;
+        };
+        if !state.has_card(Some(card)) {
+            continue;
+        }
+        for mana in pay_options(state.mana(), cost) {
+            let mut next = state.clone();
+            next.remove_hand_card(card);
+            next.move_hand_to_graveyard(ctx);
+            next.add_graveyard_card(ctx, card);
+            for _ in 0..7 {
+                next = draw_card_fast(next);
+            }
+            next.set_mana(mana);
+            actions.push(FastAction::new(
+                after_cast_fast(ctx, state, next),
+                DEFAULT_PRIORITY,
+            ));
+        }
+    }
+
+    if let Some(card) = ctx.card_id("Dramatic Reversal") {
+        if state.has_card(Some(card)) {
+            for mana in pay_options(state.mana(), [1, 0, 0, 1, 0, 0]) {
+                let mut next = state.clone();
+                next.remove_hand_to_graveyard(ctx, card);
+                for perm in &mut next.battlefield {
+                    if !perm.kind_enum().is_land() {
+                        *perm = perm.with_tapped(false);
+                    }
+                }
+                next.set_mana(mana);
+                sort_fast_battlefield(ctx, &mut next.battlefield);
+                actions.push(FastAction::new(
+                    after_cast_fast(ctx, state, next),
+                    DEFAULT_PRIORITY,
+                ));
+            }
+        }
+    }
+
+    if let Some(card) = ctx.card_id("Curse of Opulence") {
+        if state.has_card(Some(card)) {
+            for mana in pay_options(state.mana(), [0, 0, 1, 0, 0, 0]) {
+                let mut next = state.clone();
+                next.remove_hand_to_graveyard(ctx, card);
+                let curse = make_perm(ctx, FastPermKind::Curse, false, color_mask("R"), false, 0);
+                next.push_perm(ctx, curse);
+                next.set_flag(FastState::CURSE_ACTIVE, true);
+                next.set_mana(mana);
+                actions.push(FastAction::new(
+                    after_cast_fast(ctx, state, next),
+                    DEFAULT_PRIORITY,
+                ));
+            }
+        }
+    }
+
+    // In a four-player opening, the conservative deterministic floor is the
+    // assumed seven-card opponent hand. The exile mode is omitted because its
+    // cards expire this turn and requires a separate temporary-zone state.
+    if let Some(card) = ctx.card_id("Jeska's Will") {
+        if state.has_card(Some(card))
+            && state
+                .battlefield
+                .iter()
+                .any(|perm| perm.kind_enum() == FastPermKind::Rog)
+        {
+            for mana in pay_options(state.mana(), [2, 0, 1, 0, 0, 0]) {
+                let mut next = state.clone();
+                next.remove_hand_to_graveyard(ctx, card);
+                next.set_mana(add_mana(mana, [0, 7, 0, 0, 0, 0]));
+                for _ in 0..3 {
+                    if next.library.is_empty() {
+                        break;
+                    }
+                    let revealed = next.library.remove(0);
+                    next.add_jeska_exile_card(revealed);
+                }
+                actions.push(FastAction::new(
+                    after_cast_fast(ctx, state, next),
+                    FAST_MANA_PRIORITY,
+                ));
+            }
+        }
+    }
+
+    if ctx.turbo_draw_engines {
+        if let Some(card) = ctx.card_id("Necropotence") {
+            if state.has_card(Some(card)) {
+                for mana in pay_options(state.mana(), [0, 3, 0, 0, 0, 0]) {
+                    let mut next = state.clone();
+                    next.remove_hand_to_graveyard(ctx, card);
+                    next.set_mana(mana);
+                    next.set_flag(FastState::NECRO_PENDING, true);
+                    actions.push(FastAction::new(
+                        after_cast_fast(ctx, state, next),
+                        DEFAULT_PRIORITY,
+                    ));
+                }
+            }
+        }
+    }
+
+    // Life is not otherwise a constrained resource in the opening engine. Fifteen
+    // revealed cards is a documented conservative proxy for a 40-life Ad Nauseam.
+    if ctx.turbo_draw_engines {
+        if let Some(card) = ctx.card_id("Ad Nauseam") {
+            if state.has_card(Some(card)) {
+                for mana in pay_options(state.mana(), [3, 2, 0, 0, 0, 0]) {
+                    let mut next = state.clone();
+                    next.remove_hand_to_graveyard(ctx, card);
+                    for _ in 0..15 {
+                        next = draw_card_fast(next);
+                    }
+                    next.set_mana(mana);
+                    actions.push(FastAction::new(
+                        after_cast_fast(ctx, state, next),
+                        DEFAULT_PRIORITY,
+                    ));
+                }
+            }
+        }
+    }
+
+    if let Some(flare) = ctx.card_id("Flare of Duplication") {
+        if state.has_card(Some(flare)) {
+            for (ritual_name, cost, add) in [
+                ("Dark Ritual", [0, 1, 0, 0, 0, 0], [3, 0, 0, 0, 0, 0]),
+                ("Rite of Flame", [0, 0, 1, 0, 0, 0], [0, 2, 0, 0, 0, 0]),
+                ("Cabal Ritual", [1, 1, 0, 0, 0, 0], [3, 0, 0, 0, 0, 0]),
+            ] {
+                let Some(ritual) = ctx.card_id(ritual_name) else {
+                    continue;
+                };
+                if !state.has_card(Some(ritual)) {
+                    continue;
+                }
+                for creature_index in unique_creature_indices(state) {
+                    let creature = state.battlefield[creature_index];
+                    if (creature.colors() & color_mask("R")) == 0 {
+                        continue;
+                    }
+                    for mana in pay_options(state.mana(), cost) {
+                        let base = sac_creature_fast(ctx, state, creature_index);
+                        let mut next = base.clone();
+                        next.remove_hand_to_graveyard(ctx, ritual);
+                        next.remove_hand_to_graveyard(ctx, flare);
+                        next.set_mana(add_mana(add_mana(mana, add), add));
+                        next = after_cast_fast(ctx, &base, next);
+                        next = after_cast_fast(ctx, &next.clone(), next);
+                        let storm_kilns = base
+                            .battlefield
+                            .iter()
+                            .filter(|perm| perm.kind_enum() == FastPermKind::StormKiln)
+                            .count();
+                        for _ in 0..storm_kilns.saturating_mul(3) {
+                            let treasure =
+                                make_perm(ctx, FastPermKind::Treasure, false, 0, false, 0);
+                            next.push_perm(ctx, treasure);
+                        }
+                        actions.push(FastAction::new(next, DEFAULT_PRIORITY));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(flashback) = ctx.card_id("Flashback") {
+        if state.has_card(Some(flashback)) {
+            for (ritual_name, cost, add) in [
+                ("Dark Ritual", [0, 1, 0, 0, 0, 0], [3, 0, 0, 0, 0, 0]),
+                ("Rite of Flame", [0, 0, 1, 0, 0, 0], [0, 2, 0, 0, 0, 0]),
+                ("Cabal Ritual", [1, 1, 0, 0, 0, 0], [3, 0, 0, 0, 0, 0]),
+            ] {
+                let Some(ritual) = ctx.card_id(ritual_name) else {
+                    continue;
+                };
+                if state.graveyard.binary_search(&ritual).is_err() {
+                    continue;
+                }
+                for after_flashback in pay_options(state.mana(), [0, 0, 1, 0, 0, 0]) {
+                    let mut cast_flashback = state.clone();
+                    cast_flashback.remove_hand_to_graveyard(ctx, flashback);
+                    cast_flashback.set_mana(after_flashback);
+                    cast_flashback = after_cast_fast(ctx, state, cast_flashback);
+                    for after_ritual in pay_options(cast_flashback.mana(), cost) {
+                        let mut next = cast_flashback.clone();
+                        next.remove_graveyard_card(ctx, ritual);
+                        next.set_mana(add_mana(after_ritual, add));
+                        next = after_cast_fast(ctx, &cast_flashback, next);
+                        actions.push(FastAction::new(next, DEFAULT_PRIORITY));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn generate_fast_brain_freeze_actions(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+) {
+    let Some(card) = ctx.card_id("Brain Freeze") else {
+        return;
+    };
+    if !state.has_card(Some(card)) {
+        return;
+    }
+    for mana in pay_options(state.mana(), [1, 0, 0, 1, 0, 0]) {
+        let copies = state.spells_this_turn().saturating_add(1);
+        let mut next = state.clone();
+        next.remove_hand_card(card);
+        next.set_mana(mana);
+        next = after_cast_fast(ctx, state, next);
+        for _ in 0..usize::from(copies).saturating_mul(3) {
+            if next.library.is_empty() {
+                break;
+            }
+            let milled = next.library.remove(0);
+            next.add_graveyard_card(ctx, milled);
+        }
+        next.add_graveyard_card(ctx, card);
+        actions.push(FastAction::new(next, ENGINE_TUTOR_PRIORITY));
+    }
+}
+
+fn generate_fast_breach_escape_actions(
+    ctx: &mut FastContext,
+    actions: &mut Vec<FastAction>,
+    state: &FastState,
+    config: &FastSearchConfig,
+) {
+    if !state
+        .battlefield
+        .iter()
+        .any(|perm| perm.kind_enum() == FastPermKind::Breach)
+    {
+        return;
+    }
+
+    for (led_index, led) in state.battlefield.iter().copied().enumerate() {
+        if led.kind_enum() != FastPermKind::Led || led.tapped() {
+            continue;
+        }
+        for color in 0..5 {
+            let mut next = state.clone();
+            remove_perm_to_graveyard(ctx, &mut next, led_index);
+            next.move_hand_to_graveyard(ctx);
+            next.set_mana(add_mana(state.mana(), led_mana_for_color(color)));
+            actions.push(FastAction::new(next, FAST_MANA_PRIORITY));
+        }
+    }
+
+    if state.graveyard.len() < 4 {
+        return;
+    }
+
+    for name in [
+        "Rhystic Study",
+        "Heartwood Storyteller",
+        "Brain Freeze",
+        "Lion's Eye Diamond",
+        "Lotus Petal",
+        "Dark Ritual",
+        "Rite of Flame",
+        "Cabal Ritual",
+        "Manamorphose",
+        "Gitaxian Probe",
+        "Rain of Filth",
+        "Culling the Weak",
+        "Noxious Revival",
+        "Summoner's Pact",
+        "Green Sun's Zenith",
+        "Eldritch Evolution",
+        "Crop Rotation",
+        "Demonic Tutor",
+        "Diabolic Intent",
+        "Grim Tutor",
+        "Idyllic Tutor",
+        "Beseech the Mirror",
+        "Enlightened Tutor",
+        "Imperial Seal",
+        "Mystical Tutor",
+        "Scheming Symmetry",
+        "Vampiric Tutor",
+        "Gamble",
+        "Wishclaw Talisman",
+        "Tinder Wall",
+    ] {
+        let Some(card) = ctx.card_id(name) else {
+            continue;
+        };
+        if state.graveyard.binary_search(&card).is_err() {
+            continue;
+        }
+        let Some(mut escaped) = pay_escape_cards_fast(ctx, state, card) else {
+            continue;
+        };
+        escaped.add_hand_card(card);
+        let mut generated = Vec::new();
+        match name {
+            "Rhystic Study" | "Heartwood Storyteller" => {
+                generate_fast_engine_actions(ctx, &mut generated, &escaped)
+            }
+            "Brain Freeze" => generate_fast_brain_freeze_actions(ctx, &mut generated, &escaped),
+            "Lion's Eye Diamond" | "Lotus Petal" => {
+                generate_fast_zero_artifact_actions(ctx, &mut generated, &escaped)
+            }
+            "Dark Ritual" | "Rite of Flame" | "Cabal Ritual" => {
+                generate_fast_ritual_actions(ctx, &mut generated, &escaped)
+            }
+            "Manamorphose" => generate_fast_manamorphose_actions(ctx, &mut generated, &escaped),
+            "Gitaxian Probe" => generate_fast_gitaxian_probe_actions(ctx, &mut generated, &escaped),
+            "Rain of Filth" => generate_fast_rain_actions(ctx, &mut generated, &escaped),
+            "Culling the Weak" => generate_fast_sac_spell_actions(ctx, &mut generated, &escaped),
+            "Noxious Revival" => generate_fast_noxious_actions(ctx, &mut generated, &escaped),
+            "Summoner's Pact" => {
+                generate_fast_summoners_pact_actions(ctx, &mut generated, &escaped)
+            }
+            "Green Sun's Zenith" => generate_fast_green_sun_actions(ctx, &mut generated, &escaped),
+            "Eldritch Evolution" => {
+                generate_fast_eldritch_evolution_actions(ctx, &mut generated, &escaped)
+            }
+            "Crop Rotation" => generate_fast_crop_rotation_actions(ctx, &mut generated, &escaped),
+            "Demonic Tutor" | "Diabolic Intent" | "Grim Tutor" | "Idyllic Tutor" => {
+                generate_fast_hand_tutor_actions(ctx, &mut generated, &escaped)
+            }
+            "Beseech the Mirror" => generate_fast_beseech_actions(ctx, &mut generated, &escaped),
+            "Enlightened Tutor" | "Imperial Seal" | "Mystical Tutor" | "Scheming Symmetry"
+            | "Vampiric Tutor" => generate_fast_top_tutor_actions(ctx, &mut generated, &escaped),
+            "Gamble" => generate_fast_gamble_actions(ctx, &mut generated, &escaped, config),
+            "Wishclaw Talisman" => {
+                generate_fast_artifact_spell_actions(ctx, &mut generated, &escaped)
+            }
+            "Tinder Wall" => generate_fast_creature_actions(ctx, &mut generated, &escaped),
+            _ => {}
+        }
+        actions.extend(
+            generated
+                .into_iter()
+                .filter(|action| !action.next_state.has_card(Some(card))),
+        );
+    }
+}
+
+fn pay_escape_cards_fast(
+    ctx: &FastContext,
+    state: &FastState,
+    escaped: CardId,
+) -> Option<FastState> {
+    if state.graveyard.binary_search(&escaped).is_err() || state.graveyard.len() < 4 {
+        return None;
+    }
+    let mut next = state.clone();
+    next.remove_graveyard_card(ctx, escaped);
+    let mut candidates: Vec<CardId> = next.graveyard.iter().copied().collect();
+    candidates.sort_by_key(|card| {
+        let spec = ctx.card_spec(*card);
+        let preserve = if matches!(ctx.card_name(*card), "Brain Freeze" | "Lion's Eye Diamond") {
+            5
+        } else if spec.flags.contains(CardFlags::ENGINE) {
+            4
+        } else if spec.flags.contains(CardFlags::TUTOR) {
+            3
+        } else if spec.flags.contains(CardFlags::MANA) {
+            2
+        } else {
+            0
+        };
+        (preserve, *card)
+    });
+    let others: Vec<CardId> = candidates.into_iter().take(3).collect();
+    if others.len() != 3 {
+        return None;
+    }
+    for card in others {
+        next.remove_graveyard_card(ctx, card);
+    }
+    Some(next)
 }
 
 fn generate_fast_manamorphose_actions(
@@ -2751,6 +4522,9 @@ fn generate_fast_gitaxian_probe_actions(
     actions: &mut Vec<FastAction>,
     state: &FastState,
 ) {
+    if vexing_bauble_active(state) {
+        return;
+    }
     let Some(card) = ctx.card_id("Gitaxian Probe") else {
         return;
     };
@@ -2849,22 +4623,27 @@ fn generate_fast_sac_spell_actions(
     actions: &mut Vec<FastAction>,
     state: &FastState,
 ) {
-    let Some(culling) = ctx.card_id("Culling the Weak") else {
-        return;
-    };
-    if !state.has_card(Some(culling)) {
-        return;
-    }
-    for creature_index in unique_creature_indices(state) {
-        for mana in pay_options(state.mana(), [0, 1, 0, 0, 0, 0]) {
-            let base = sac_creature_fast(ctx, state, creature_index);
-            let mut next = base.clone();
-            next.remove_hand_to_graveyard(ctx, culling);
-            next.set_mana(add_mana(mana, [4, 0, 0, 0, 0, 0]));
-            actions.push(FastAction::new(
-                after_cast_fast(ctx, &base, next),
-                DEFAULT_PRIORITY,
-            ));
+    for (name, cost, add) in [
+        ("Culling the Weak", [0, 1, 0, 0, 0, 0], [4, 0, 0, 0, 0, 0]),
+        ("Infernal Plunge", [0, 0, 1, 0, 0, 0], [0, 3, 0, 0, 0, 0]),
+    ] {
+        let Some(card) = ctx.card_id(name) else {
+            continue;
+        };
+        if !state.has_card(Some(card)) {
+            continue;
+        }
+        for creature_index in unique_creature_indices(state) {
+            for mana in pay_options(state.mana(), cost) {
+                let base = sac_creature_fast(ctx, state, creature_index);
+                let mut next = base.clone();
+                next.remove_hand_to_graveyard(ctx, card);
+                next.set_mana(add_mana(mana, add));
+                actions.push(FastAction::new(
+                    after_cast_fast(ctx, &base, next),
+                    DEFAULT_PRIORITY,
+                ));
+            }
         }
     }
 }
@@ -2963,6 +4742,10 @@ fn generate_fast_summoners_pact_actions(
         "Noble Hierarch",
         "Ignoble Hierarch",
         "Heartwood Storyteller",
+        "Badgermole Cub",
+        "Dryad Arbor",
+        "Gene Pollinator",
+        "Kinnan, Bonder Prodigy",
     ] {
         let Some(target) = ctx.card_id(target_name) else {
             continue;
@@ -3010,6 +4793,7 @@ fn generate_fast_green_sun_actions_for_cost(
             "Birds of Paradise",
             "Deathrite Shaman",
             "Wild Cantor",
+            "Gene Pollinator",
             "Noble Hierarch",
             "Ignoble Hierarch",
         ] {
@@ -3031,6 +4815,30 @@ fn generate_fast_green_sun_actions_for_cost(
                     after_cast_fast(ctx, state, next),
                     ENGINE_TUTOR_PRIORITY,
                 ));
+            }
+        }
+    }
+    for (target_name, cost) in [
+        ("Dryad Arbor", [0, 0, 0, 0, 0, 1]),
+        ("Badgermole Cub", [2, 0, 0, 0, 0, 1]),
+        ("Kinnan, Bonder Prodigy", [2, 0, 0, 0, 0, 1]),
+    ] {
+        if !payment_cost_matches(cost_filter, cost) {
+            continue;
+        }
+        let Some(target) = ctx.card_id(target_name) else {
+            continue;
+        };
+        if !state.has_library_card(Some(target)) {
+            continue;
+        }
+        for mana in pay_options(state.mana(), cost) {
+            let mut base = state.clone();
+            base.remove_hand_card(gsz);
+            base.set_mana(mana);
+            base = after_cast_fast(ctx, state, base);
+            for next in resolve_creature_battlefield_tutor_fast(ctx, &base, target, false) {
+                actions.push(FastAction::new(next, ENGINE_TUTOR_PRIORITY));
             }
         }
     }
@@ -3240,6 +5048,10 @@ fn generate_fast_crop_rotation_actions(
                 "Tundra",
                 "Underground Sea",
                 "Volcanic Island",
+                "Gaea's Cradle",
+                "Forest",
+                "Dryad Arbor",
+                "Shifting Woodland",
             ] {
                 let Some(target) = ctx.card_id(target_name) else {
                     continue;
@@ -3249,9 +5061,12 @@ fn generate_fast_crop_rotation_actions(
                 }
                 let target_removed_library =
                     PersistentLibrary::from(remove_first_card_vec(&state.library, target));
-                for (target_perm, library, grave_inc) in
-                    land_options_fast(ctx, target, &target_removed_library)
-                {
+                for (target_perm, library, grave_inc) in land_options_fast(
+                    ctx,
+                    target,
+                    &target_removed_library,
+                    controls_forest_fast(state),
+                ) {
                     let base = sac_land_fast(ctx, state, land_index);
                     let mut next = base.clone();
                     next.remove_hand_to_graveyard(ctx, crop);
@@ -3611,6 +5426,11 @@ fn simplified_gamble_discard_fast(
     target: CardId,
     hand_after_search: &[CardId],
 ) -> CardId {
+    let discardable: Vec<CardId> = hand_after_search
+        .iter()
+        .copied()
+        .filter(|card| !state.is_jeska_exiled(*card))
+        .collect();
     let mut hasher = Blake2bVar::new(8).expect("valid digest size");
     for part in [
         "gamble-v1".to_string(),
@@ -3621,7 +5441,7 @@ fn simplified_gamble_discard_fast(
         hasher.update(part.as_bytes());
         hasher.update(&[0x1e]);
     }
-    for card in hand_after_search {
+    for card in &discardable {
         hasher.update(ctx.card_name(*card).as_bytes());
         hasher.update(&[0x1f]);
     }
@@ -3629,8 +5449,8 @@ fn simplified_gamble_discard_fast(
     hasher
         .finalize_variable(&mut digest)
         .expect("digest output size");
-    let index = (u64::from_be_bytes(digest) as usize) % hand_after_search.len().max(1);
-    hand_after_search[index]
+    let index = (u64::from_be_bytes(digest) as usize) % discardable.len().max(1);
+    discardable.get(index).copied().unwrap_or(target)
 }
 
 fn generate_fast_led_tutor_line(
@@ -3786,6 +5606,9 @@ fn cast_fast_cost_action(
     cost: Cost,
     priority: i32,
 ) {
+    if cost == [0, 0, 0, 0, 0, 0] && vexing_bauble_active(state) {
+        return;
+    }
     let Some(card) = ctx.card_id(name) else {
         return;
     };
@@ -3823,7 +5646,127 @@ fn after_cast_fast(ctx: &mut FastContext, before: &FastState, mut after: FastSta
         let treasure = make_perm(ctx, FastPermKind::Treasure, false, 0, false, 0);
         after.push_perm(ctx, treasure);
     }
+    let removed = removed_hand_cards_fast(before, &after);
+    if removed.len() == 1 {
+        let card = removed[0];
+        let name = ctx.card_name(card);
+        let is_creature_spell = ctx.card_spec(card).flags.contains(CardFlags::CREATURE);
+        if is_instant_or_sorcery_fast(name) {
+            let storm_kilns = before
+                .battlefield
+                .iter()
+                .filter(|perm| perm.kind_enum() == FastPermKind::StormKiln)
+                .count();
+            for _ in 0..storm_kilns {
+                let treasure = make_perm(ctx, FastPermKind::Treasure, false, 0, false, 0);
+                after.push_perm(ctx, treasure);
+            }
+        }
+        if !is_creature_spell {
+            for perm in &mut after.battlefield {
+                if matches!(perm.kind_enum(), FastPermKind::Bird | FastPermKind::Valley) {
+                    *perm = perm.with_tapped(false);
+                }
+            }
+            sort_fast_battlefield(ctx, &mut after.battlefield);
+        }
+    }
     after
+}
+
+fn removed_hand_cards_fast(before: &FastState, after: &FastState) -> Vec<CardId> {
+    let mut remaining = after.hand.to_vec();
+    let mut removed = Vec::new();
+    for card in &before.hand {
+        if let Ok(index) = remaining.binary_search(card) {
+            remaining.remove(index);
+        } else {
+            removed.push(*card);
+        }
+    }
+    removed
+}
+
+fn is_instant_or_sorcery_fast(name: &str) -> bool {
+    matches!(
+        name,
+        "Ad Nauseam"
+            | "An Offer You Can't Refuse"
+            | "Beseech the Mirror"
+            | "Borne Upon a Wind"
+            | "Cabal Ritual"
+            | "Chain of Vapor"
+            | "Chord of Calling"
+            | "Crop Rotation"
+            | "Culling the Weak"
+            | "Dark Ritual"
+            | "Demonic Consultation"
+            | "Demonic Tutor"
+            | "Diabolic Intent"
+            | "Dramatic Reversal"
+            | "Finale of Devastation"
+            | "Flare of Duplication"
+            | "Gamble"
+            | "Gitaxian Probe"
+            | "Green Sun's Zenith"
+            | "Imperial Seal"
+            | "Infernal Plunge"
+            | "Jeska's Will"
+            | "Manamorphose"
+            | "Mystical Tutor"
+            | "Nature's Rhythm"
+            | "Noxious Revival"
+            | "Rain of Filth"
+            | "Rite of Flame"
+            | "Scheming Symmetry"
+            | "Summoner's Pact"
+            | "Tainted Pact"
+            | "Vampiric Tutor"
+            | "Wheel of Fortune"
+            | "Windfall"
+            | "Worldly Tutor"
+    )
+}
+
+fn is_sorcery_fast(name: &str) -> bool {
+    matches!(
+        name,
+        "Beseech the Mirror"
+            | "Demonic Tutor"
+            | "Finale of Devastation"
+            | "Gamble"
+            | "Gitaxian Probe"
+            | "Green Sun's Zenith"
+            | "Imperial Seal"
+            | "Nature's Rhythm"
+            | "Scheming Symmetry"
+            | "Wheel of Fortune"
+    )
+}
+
+fn apply_known_noncreature_cast_triggers_fast(
+    ctx: &mut FastContext,
+    before: &FastState,
+    after: &mut FastState,
+    instant_or_sorcery: bool,
+) {
+    if instant_or_sorcery {
+        let storm_kilns = before
+            .battlefield
+            .iter()
+            .filter(|perm| perm.kind_enum() == FastPermKind::StormKiln)
+            .count();
+        for _ in 0..storm_kilns {
+            let treasure = make_perm(ctx, FastPermKind::Treasure, false, 0, false, 0);
+            after.push_perm(ctx, treasure);
+        }
+    }
+    for perm in &mut after.battlefield {
+        if matches!(perm.kind_enum(), FastPermKind::Bird | FastPermKind::Valley) {
+            *perm = perm.with_tapped(false);
+        }
+    }
+    sort_fast_battlefield(ctx, &mut after.battlefield);
 }
 
 fn add_engine_fast(
@@ -3916,7 +5859,7 @@ fn unique_creature_indices(state: &FastState) -> Vec<usize> {
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for (index, perm) in state.battlefield.iter().enumerate() {
-        if !perm.kind_enum().is_creature() {
+        if !perm.kind_enum().is_creature() && !perm.earthbent() {
             continue;
         }
         let key = (
@@ -3924,6 +5867,7 @@ fn unique_creature_indices(state: &FastState) -> Vec<usize> {
             perm.tapped(),
             perm.colors(),
             perm.fresh(),
+            perm.earthbent(),
             perm.counters(),
         );
         if seen.insert(key) {
@@ -3931,6 +5875,14 @@ fn unique_creature_indices(state: &FastState) -> Vec<usize> {
         }
     }
     out
+}
+
+fn creature_count_fast(state: &FastState) -> usize {
+    state
+        .battlefield
+        .iter()
+        .filter(|perm| perm.kind_enum().is_creature() || perm.earthbent())
+        .count()
 }
 
 fn mantle_key_fast(ctx: &mut FastContext, perm: FastPerm) -> SmallVec<[InternId; 2]> {
@@ -3974,6 +5926,10 @@ fn remove_perm_to_graveyard(
         return None;
     }
     let perm = state.remove_perm(ctx, index);
+    if perm.earthbent() {
+        state.push_perm(ctx, returned_earthbent_land_fast(perm));
+        return Some(perm);
+    }
     if let Some(card) = graveyard_card_for_perm(ctx, perm) {
         state.add_graveyard_card(ctx, card);
     }
@@ -3989,12 +5945,32 @@ fn remove_land_perm_to_graveyard(
         return None;
     }
     let perm = state.remove_perm(ctx, index);
+    if perm.earthbent() {
+        state.push_perm(ctx, returned_earthbent_land_fast(perm));
+        return Some(perm);
+    }
     if let Some(card) = graveyard_card_for_perm(ctx, perm) {
         state.add_graveyard_card(ctx, card);
     } else {
         state.add_land_grave(1);
     }
     Some(perm)
+}
+
+fn returned_earthbent_land_fast(perm: FastPerm) -> FastPerm {
+    let counters = if perm.kind_enum() == FastPermKind::Mine {
+        3
+    } else {
+        perm.counters()
+    };
+    FastPerm::new(
+        perm.kind_enum(),
+        true,
+        perm.kind_enum() == FastPermKind::DryadArbor,
+        perm.colors(),
+        counters,
+        perm.extra_id(),
+    )
 }
 
 fn graveyard_card_for_perm(ctx: &FastContext, perm: FastPerm) -> Option<CardId> {
@@ -4011,8 +5987,13 @@ fn graveyard_card_for_perm(ctx: &FastContext, perm: FastPerm) -> Option<CardId> 
 fn fast_tap_options(state: &FastState, perm: FastPerm) -> SmallVec<[FastTap; 5]> {
     let mut out = SmallVec::new();
     match perm.kind_enum() {
-        FastPermKind::Land | FastPermKind::Chrome => {
-            push_color_mask_options(&mut out, perm.colors())
+        FastPermKind::Land
+        | FastPermKind::ForestLand
+        | FastPermKind::BasicForest
+        | FastPermKind::Woodland
+        | FastPermKind::Chrome => push_color_mask_options(&mut out, perm.colors()),
+        FastPermKind::DryadArbor if !perm.fresh() => {
+            push_color_mask_options(&mut out, color_mask("G"))
         }
         FastPermKind::Cavern
         | FastPermKind::Mine
@@ -4026,8 +6007,14 @@ fn fast_tap_options(state: &FastState, perm: FastPerm) -> SmallVec<[FastTap; 5]>
             out.push(FastTap::Colorless(2))
         }
         FastPermKind::Vein => out.push(FastTap::Colorless(1)),
-        FastPermKind::Vault => out.push(FastTap::Vault),
-        FastPermKind::Signet | FastPermKind::Relic => {
+        FastPermKind::Vault | FastPermKind::Grim => out.push(FastTap::Vault),
+        FastPermKind::Talisman => {
+            out.push(FastTap::Colorless(1));
+            out.push(FastTap::Color(0));
+            out.push(FastTap::Color(3));
+        }
+        FastPermKind::Signet => push_color_mask_options(&mut out, perm.colors()),
+        FastPermKind::Relic => {
             for color in 0..5 {
                 out.push(FastTap::Color(color));
             }
@@ -4041,7 +6028,7 @@ fn fast_tap_options(state: &FastState, perm: FastPerm) -> SmallVec<[FastTap; 5]>
             let mut available = 0u8;
             for permanent in &state.battlefield {
                 if permanent.kind_enum().is_legendary() {
-                    available |= permanent.colors();
+                    available |= permanent_color_mask_fast(*permanent);
                 }
             }
             push_color_mask_options(&mut out, available);
@@ -4067,6 +6054,42 @@ fn fast_tap_options(state: &FastState, perm: FastPerm) -> SmallVec<[FastTap; 5]>
     out
 }
 
+fn mana_with_tap_bonuses(
+    state: &FastState,
+    perm: FastPerm,
+    base: Mana,
+    creature_own_tap_ability: bool,
+) -> Mana {
+    let mut out = base;
+    let produced_type = base.iter().position(|amount| *amount > 0);
+    if !perm.kind_enum().is_land() {
+        if let Some(index) = produced_type {
+            let kinnans = state
+                .battlefield
+                .iter()
+                .filter(|item| item.kind_enum() == FastPermKind::Kinnan)
+                .count()
+                .min(15) as u8;
+            out[index] = out[index].saturating_add(kinnans);
+        }
+    }
+    if creature_own_tap_ability && (perm.kind_enum().is_creature() || perm.earthbent()) {
+        let badgermoles = state
+            .battlefield
+            .iter()
+            .filter(|item| item.kind_enum() == FastPermKind::Badgermole)
+            .count()
+            .min(15) as u8;
+        out[4] = out[4].saturating_add(badgermoles);
+    }
+    if perm.kind_enum().is_land() {
+        if let Some(color) = perm.shimmer_color() {
+            out[color] = out[color].saturating_add(1);
+        }
+    }
+    out
+}
+
 fn push_color_mask_options(out: &mut SmallVec<[FastTap; 5]>, mask: u8) {
     for color in 0..5 {
         if (mask & (1 << color)) != 0 {
@@ -4086,10 +6109,27 @@ fn artifact_count_fast(state: &FastState) -> usize {
         .count()
 }
 
+fn vexing_bauble_active(state: &FastState) -> bool {
+    state
+        .battlefield
+        .iter()
+        .any(|perm| perm.kind_enum() == FastPermKind::Bauble)
+}
+
+fn controls_forest_fast(state: &FastState) -> bool {
+    state.battlefield.iter().any(|perm| {
+        matches!(
+            perm.kind_enum(),
+            FastPermKind::BasicForest | FastPermKind::ForestLand | FastPermKind::DryadArbor
+        )
+    })
+}
+
 fn land_options_fast(
     ctx: &mut FastContext,
     card: CardId,
     library: &PersistentLibrary,
+    controls_forest: bool,
 ) -> SmallVec<[(FastPerm, PersistentLibrary, u8); 8]> {
     let card_name = ctx.card_name(card).to_string();
     let flags = ctx.card_spec(card).flags;
@@ -4113,8 +6153,20 @@ fn land_options_fast(
                 let mut next_library =
                     PersistentLibrary::from(remove_first_card_vec(library, *target));
                 obscure_library_top_after_shuffle(ctx, &mut next_library);
+                let kind = match target_name.as_str() {
+                    "Dryad Arbor" => FastPermKind::DryadArbor,
+                    "Breeding Pool" | "Taiga" | "Tropical Island" => FastPermKind::ForestLand,
+                    _ => FastPermKind::Land,
+                };
                 out.push((
-                    make_perm(ctx, FastPermKind::Land, false, colors, false, 0),
+                    make_perm(
+                        ctx,
+                        kind,
+                        false,
+                        colors,
+                        kind == FastPermKind::DryadArbor,
+                        0,
+                    ),
                     next_library,
                     1,
                 ));
@@ -4136,6 +6188,34 @@ fn land_options_fast(
             0,
         ),
         "Gemstone Mine" => make_perm(ctx, FastPermKind::Mine, false, 0, false, 3),
+        "Dryad Arbor" => make_perm(
+            ctx,
+            FastPermKind::DryadArbor,
+            false,
+            color_mask("G"),
+            true,
+            0,
+        ),
+        "Forest" => make_perm(
+            ctx,
+            FastPermKind::BasicForest,
+            false,
+            color_mask("G"),
+            false,
+            0,
+        ),
+        "Gaea's Cradle" => make_perm(ctx, FastPermKind::Cradle, false, color_mask("G"), false, 0),
+        "Shifting Woodland" => {
+            let tapped = !controls_forest;
+            make_perm(
+                ctx,
+                FastPermKind::Woodland,
+                tapped,
+                color_mask("G"),
+                false,
+                0,
+            )
+        }
         _ if is_theoretical_rainbow_land_name(&card_name) => make_perm(
             ctx,
             FastPermKind::Land,
@@ -4144,8 +6224,12 @@ fn land_options_fast(
             false,
             0,
         ),
-        "City of Brass" | "Command Tower" | "Exotic Orchard" | "Forbidden Orchard"
-        | "Mana Confluence" | "Starting Town" | "Tarnished Citadel" => make_perm(
+        "Command Tower" => {
+            let colors = ctx.commander_identity_colors();
+            make_perm(ctx, FastPermKind::Land, false, colors, false, 0)
+        }
+        "City of Brass" | "Exotic Orchard" | "Forbidden Orchard" | "Mana Confluence"
+        | "Starting Town" | "Tarnished Citadel" => make_perm(
             ctx,
             FastPermKind::Land,
             false,
@@ -4162,7 +6246,15 @@ fn land_options_fast(
         "Sea of Clouds" => make_perm(ctx, FastPermKind::Land, false, color_mask("UW"), false, 0),
         _ => {
             if let Some(colors) = land_type_color_mask(&card_name) {
-                make_perm(ctx, FastPermKind::Land, false, colors, false, 0)
+                let kind = if matches!(
+                    card_name.as_str(),
+                    "Breeding Pool" | "Taiga" | "Tropical Island"
+                ) {
+                    FastPermKind::ForestLand
+                } else {
+                    FastPermKind::Land
+                };
+                make_perm(ctx, kind, false, colors, false, 0)
             } else {
                 make_perm(ctx, FastPermKind::Land, false, color_mask("C"), false, 0)
             }
@@ -4176,10 +6268,13 @@ fn tutor_targets_fast(ctx: &FastContext, tutor: &str, state: &FastState) -> Vec<
         tutor,
         "Imperial Seal" | "Scheming Symmetry" | "Vampiric Tutor"
     ) {
-        return [
+        let mut targets: Vec<CardId> = [
             "Rhystic Study",
             "Heartwood Storyteller",
+            "Underworld Breach",
+            "Brain Freeze",
             "Demonic Tutor",
+            "Demonic Consultation",
             "Beseech the Mirror",
             "Wishclaw Talisman",
             "Diabolic Intent",
@@ -4199,11 +6294,14 @@ fn tutor_targets_fast(ctx: &FastContext, tutor: &str, state: &FastState) -> Vec<
             "Mana Vault",
             "Sol Ring",
             "Dark Ritual",
+            "Cabal Ritual",
             "Culling the Weak",
             "Rain of Filth",
             "Rite of Flame",
             "Elvish Spirit Guide",
             "Simian Spirit Guide",
+            "Tainted Pact",
+            "Grim Monolith",
             "Tinder Wall",
             "Mox Amber",
             "Mox Diamond",
@@ -4211,16 +6309,58 @@ fn tutor_targets_fast(ctx: &FastContext, tutor: &str, state: &FastState) -> Vec<
             "Mox Opal",
             "Springleaf Drum",
             "Paradise Mantle",
+            "Jeweled Amulet",
+            "Arcane Signet",
+            "Relic of Legends",
             "Manamorphose",
+            "Infernal Plunge",
+            "Birds of Paradise",
+            "Ragavan, Nimble Pilferer",
+            "Wild Cantor",
+            "Chord of Calling",
+            "Finale of Devastation",
+            "Nature's Rhythm",
+            "Ancient Tomb",
+            "City of Traitors",
+            "Crystal Vein",
+            "Command Tower",
+            "City of Brass",
+            "Mana Confluence",
+            "Gemstone Mine",
+            "Starting Town",
+            "Tarnished Citadel",
+            "Exotic Orchard",
+            "Forbidden Orchard",
+            "Glimmervoid",
+            "Arid Mesa",
+            "Bloodstained Mire",
+            "Flooded Strand",
+            "Marsh Flats",
+            "Misty Rainforest",
+            "Polluted Delta",
+            "Scalding Tarn",
+            "Verdant Catacombs",
+            "Windswept Heath",
+            "Wooded Foothills",
         ]
         .iter()
         .filter_map(|name| ctx.card_id(name))
         .filter(|target| state.library.contains_card(*target))
         .collect();
+        targets.sort_unstable_by(|left, right| {
+            let left_name = ctx.card_name(*left);
+            let right_name = ctx.card_name(*right);
+            (engine_target_priority_rank(left_name), left_name)
+                .cmp(&(engine_target_priority_rank(right_name), right_name))
+        });
+        targets.dedup();
+        return targets;
     }
     if tutor == "Mystical Tutor" {
-        return [
+        let mut targets: Vec<CardId> = [
+            "Brain Freeze",
             "Demonic Tutor",
+            "Demonic Consultation",
             "Beseech the Mirror",
             "Diabolic Intent",
             "Grim Tutor",
@@ -4233,6 +6373,7 @@ fn tutor_targets_fast(ctx: &FastContext, tutor: &str, state: &FastState) -> Vec<
             "Summoner's Pact",
             "Crop Rotation",
             "Dark Ritual",
+            "Cabal Ritual",
             "Culling the Weak",
             "Rain of Filth",
             "Rite of Flame",
@@ -4240,20 +6381,63 @@ fn tutor_targets_fast(ctx: &FastContext, tutor: &str, state: &FastState) -> Vec<
             "An Offer You Can't Refuse",
             "Imperial Seal",
             "Infernal Plunge",
+            "Chord of Calling",
+            "Finale of Devastation",
+            "Nature's Rhythm",
             "Scheming Symmetry",
             "Vampiric Tutor",
+            "Tainted Pact",
         ]
         .iter()
         .filter_map(|name| ctx.card_id(name))
         .filter(|target| state.library.contains_card(*target))
         .collect();
+        targets.sort_unstable_by(|left, right| {
+            let left_name = ctx.card_name(*left);
+            let right_name = ctx.card_name(*right);
+            (engine_target_priority_rank(left_name), left_name)
+                .cmp(&(engine_target_priority_rank(right_name), right_name))
+        });
+        targets.dedup();
+        return targets;
     }
     if tutor == "Enlightened Tutor" || tutor == "Idyllic Tutor" {
-        return ctx
-            .card_id("Rhystic Study")
+        let names: &[&str] = if tutor == "Enlightened Tutor" {
+            &[
+                "Rhystic Study",
+                "Underworld Breach",
+                "Wishclaw Talisman",
+                "Chrome Mox",
+                "Lion's Eye Diamond",
+                "Lotus Petal",
+                "Mana Vault",
+                "Sol Ring",
+                "Mox Amber",
+                "Mox Diamond",
+                "Mox Opal",
+                "Paradise Mantle",
+                "Springleaf Drum",
+                "Grim Monolith",
+                "Jeweled Amulet",
+                "Arcane Signet",
+                "Relic of Legends",
+            ]
+        } else {
+            &["Rhystic Study", "Underworld Breach"]
+        };
+        let mut targets: Vec<CardId> = names
+            .iter()
+            .filter_map(|name| ctx.card_id(name))
             .filter(|target| state.library.contains_card(*target))
-            .into_iter()
             .collect();
+        targets.sort_unstable_by(|left, right| {
+            let left_name = ctx.card_name(*left);
+            let right_name = ctx.card_name(*right);
+            (engine_target_priority_rank(left_name), left_name)
+                .cmp(&(engine_target_priority_rank(right_name), right_name))
+        });
+        targets.dedup();
+        return targets;
     }
     if tutor == "Worldly Tutor" {
         return [
@@ -4264,17 +6448,27 @@ fn tutor_targets_fast(ctx: &FastContext, tutor: &str, state: &FastState) -> Vec<
             "Ignoble Hierarch",
             "Noble Hierarch",
             "Wild Cantor",
+            "Ragavan, Nimble Pilferer",
+            "Badgermole Cub",
+            "Dryad Arbor",
+            "Gene Pollinator",
+            "Kinnan, Bonder Prodigy",
         ]
         .iter()
         .filter_map(|name| ctx.card_id(name))
         .filter(|target| state.library.contains_card(*target))
         .collect();
     }
-    ["Rhystic Study", "Heartwood Storyteller"]
-        .iter()
-        .filter_map(|name| ctx.card_id(name))
-        .filter(|target| state.library.contains_card(*target))
-        .collect()
+    [
+        "Rhystic Study",
+        "Heartwood Storyteller",
+        "Underworld Breach",
+        "Brain Freeze",
+    ]
+    .iter()
+    .filter_map(|name| ctx.card_id(name))
+    .filter(|target| state.library.contains_card(*target))
+    .collect()
 }
 
 fn offer_bait_can_help(ctx: &FastContext, state: &FastState, bait: CardId) -> bool {
@@ -4317,8 +6511,10 @@ fn offer_counterable_costs(card: &str) -> Vec<Cost> {
     match card {
         "Summoner's Pact" | "Gitaxian Probe" | "Lotus Petal" | "Chaos Emerald" | "Chrome Mox"
         | "Lion's Eye Diamond" | "Mox Amber" | "Mox Diamond" | "Mox Opal" | "Paradise Mantle"
-        | "Noxious Revival" => vec![[0, 0, 0, 0, 0, 0]],
-        "Sol Ring" | "Mana Vault" | "Springleaf Drum" => vec![[1, 0, 0, 0, 0, 0]],
+        | "Noxious Revival" | "Jeweled Amulet" => vec![[0, 0, 0, 0, 0, 0]],
+        "Sol Ring" | "Mana Vault" | "Springleaf Drum" | "Vexing Bauble" => {
+            vec![[1, 0, 0, 0, 0, 0]]
+        }
         "Arcane Signet" => vec![[2, 0, 0, 0, 0, 0]],
         "Relic of Legends" => vec![[3, 0, 0, 0, 0, 0]],
         "Wishclaw Talisman" | "Demonic Tutor" => vec![[1, 1, 0, 0, 0, 0]],
@@ -4327,7 +6523,13 @@ fn offer_counterable_costs(card: &str) -> Vec<Cost> {
         "Dark Ritual" | "Imperial Seal" | "Scheming Symmetry" | "Vampiric Tutor" => {
             vec![[0, 1, 0, 0, 0, 0]]
         }
-        "Rite of Flame" | "Strike It Rich" => vec![[0, 0, 1, 0, 0, 0]],
+        "Rite of Flame" | "Strike It Rich" | "Curse of Opulence" | "Ragavan, Nimble Pilferer" => {
+            vec![[0, 0, 1, 0, 0, 0]]
+        }
+        "Chain of Vapor" | "Mockingbird" => vec![[0, 0, 0, 1, 0, 0]],
+        "Birds of Paradise" | "Gene Pollinator" | "Tinder Wall" => {
+            vec![[0, 0, 0, 0, 0, 1]]
+        }
         "Enlightened Tutor" => vec![[0, 0, 0, 0, 1, 0]],
         "Mystical Tutor" => vec![[0, 0, 0, 1, 0, 0]],
         "Worldly Tutor" | "Nature's Chosen" | "Green Sun's Zenith" => vec![[0, 0, 0, 0, 0, 1]],
@@ -4338,6 +6540,14 @@ fn offer_counterable_costs(card: &str) -> Vec<Cost> {
         "Necropotence" => vec![[0, 3, 0, 0, 0, 0]],
         "Smothering Tithe" => vec![[3, 0, 0, 0, 1, 0]],
         "Manamorphose" => vec![[1, 0, 1, 0, 0, 0], [1, 0, 0, 0, 0, 1]],
+        "Badgermole Cub" | "Cryptolith Rite" | "Earthcraft" | "Shimmerwilds Growth" => {
+            vec![[1, 0, 0, 0, 0, 1]]
+        }
+        "Kinnan, Bonder Prodigy" => vec![[0, 0, 0, 1, 0, 1]],
+        "Underworld Breach" => vec![[1, 0, 1, 0, 0, 0]],
+        "Borne Upon a Wind" => vec![[1, 0, 0, 1, 0, 0]],
+        "Nature's Rhythm" | "Finale of Devastation" => vec![[0, 0, 0, 0, 0, 2]],
+        "Chord of Calling" => vec![[0, 0, 0, 0, 0, 3]],
         _ => Vec::new(),
     }
 }
@@ -4346,6 +6556,8 @@ fn engine_target_priority_rank(target: &str) -> u8 {
     match target {
         "Rhystic Study" => 0,
         "Heartwood Storyteller" => 1,
+        "Underworld Breach" => 2,
+        "Brain Freeze" => 3,
         "Mystic Remora" => 2,
         "Smothering Tithe" => 3,
         "Demonic Tutor" => 4,
@@ -4448,6 +6660,11 @@ fn tutor_target_priority_fast(ctx: &FastContext, tutor: &str, target: CardId) ->
 fn creature_perm_fast(ctx: &mut FastContext, card: &str) -> FastPerm {
     let kind = match card {
         "Birds of Paradise" => FastPermKind::Bird,
+        "Birgi, God of Storytelling" => FastPermKind::Birgi,
+        "Badgermole Cub" => FastPermKind::Badgermole,
+        "Gene Pollinator" => FastPermKind::Pollinator,
+        "Kinnan, Bonder Prodigy" => FastPermKind::Kinnan,
+        "Storm-Kiln Artist" => FastPermKind::StormKiln,
         "Deathrite Shaman" => FastPermKind::Deathrite,
         "Esper Sentinel" => FastPermKind::Esper,
         "Faerie Mastermind" => FastPermKind::Faerie,
@@ -4511,6 +6728,14 @@ fn make_perm(
     };
     let extra_id = ctx.intern_string(&extra);
     FastPerm::new(kind, tapped, fresh, colors, counters, extra_id)
+}
+
+fn preserve_perm_markers(mut next: FastPerm, previous: FastPerm) -> FastPerm {
+    next = next.with_earthbent(previous.earthbent());
+    if let Some(color) = previous.shimmer_color() {
+        next = next.with_shimmer_color(color);
+    }
+    next
 }
 
 fn sort_fast_battlefield(ctx: &FastContext, battlefield: &mut SmallVec<[FastPerm; 16]>) {
@@ -4708,6 +6933,8 @@ pub(crate) fn is_land_card_name(card: &str) -> bool {
             | "Bayou"
             | "Boseiju, Who Endures"
             | "Bloodstained Mire"
+            | "Blood Crypt"
+            | "Breeding Pool"
             | "City of Brass"
             | "City of Traitors"
             | "Command Tower"
@@ -4716,11 +6943,14 @@ pub(crate) fn is_land_card_name(card: &str) -> bool {
             | "Exotic Orchard"
             | "Flooded Strand"
             | "Forbidden Orchard"
+            | "Forest"
+            | "Gaea's Cradle"
             | "Gemstone Caverns"
             | "Gemstone Mine"
             | "Glimmervoid"
             | "Glittering Caves of Aglarond"
             | "Hallowed Fountain"
+            | "Dryad Arbor"
             | "Mana Confluence"
             | "Marsh Flats"
             | "Misty Rainforest"
@@ -4732,6 +6962,7 @@ pub(crate) fn is_land_card_name(card: &str) -> bool {
             | "Scalding Tarn"
             | "Scrubland"
             | "Sea of Clouds"
+            | "Shifting Woodland"
             | "Starting Town"
             | "Steam Vents"
             | "Taiga"
@@ -4741,6 +6972,7 @@ pub(crate) fn is_land_card_name(card: &str) -> bool {
             | "Underground Sea"
             | "Verdant Catacombs"
             | "Volcanic Island"
+            | "Watery Grave"
             | "Windswept Heath"
             | "Wooded Foothills"
     )
@@ -4749,7 +6981,10 @@ pub(crate) fn is_land_card_name(card: &str) -> bool {
 pub(crate) fn is_mdfc_land_name(card: &str) -> bool {
     matches!(
         card,
-        "Sink into Stupor" | "Sink into Stupor // Soporific Springs"
+        "Sink into Stupor"
+            | "Sink into Stupor // Soporific Springs"
+            | "Hydroelectric Specimen"
+            | "Hydroelectric Specimen // Hydroelectric Laboratory"
     )
 }
 
@@ -4757,7 +6992,13 @@ pub(crate) fn is_artifact_card_name(card: &str) -> bool {
     matches!(
         card,
         "Arcane Signet"
+            | "Chromatic Star"
             | "Chrome Mox"
+            | "Defense Grid"
+            | "Grim Monolith"
+            | "Grinding Station"
+            | "Gene Pollinator"
+            | "Jeweled Amulet"
             | "Lion's Eye Diamond"
             | "Lotus Petal"
             | "Mana Vault"
@@ -4768,6 +7009,8 @@ pub(crate) fn is_artifact_card_name(card: &str) -> bool {
             | "Relic of Legends"
             | "Sol Ring"
             | "Springleaf Drum"
+            | "Talisman of Dominance"
+            | "Vexing Bauble"
             | "Wishclaw Talisman"
     )
 }
@@ -4793,6 +7036,8 @@ fn land_type_color_mask(card: &str) -> Option<u8> {
         "Badlands" => Some(color_mask("BR")),
         "Bayou" => Some(color_mask("BG")),
         "Blood Crypt" => Some(color_mask("BR")),
+        "Breeding Pool" => Some(color_mask("UG")),
+        "Dryad Arbor" => Some(color_mask("G")),
         "Hallowed Fountain" => Some(color_mask("UW")),
         "Plateau" => Some(color_mask("RW")),
         "Savannah" => Some(color_mask("GW")),
@@ -4837,7 +7082,8 @@ fn fetch_can_get_name(fetch: &str, target: &str) -> bool {
                 | "Watery Grave"
         ) | (
             "Flooded Strand",
-            "Hallowed Fountain"
+            "Breeding Pool"
+                | "Hallowed Fountain"
                 | "Plateau"
                 | "Savannah"
                 | "Scrubland"
@@ -4862,6 +7108,8 @@ fn fetch_can_get_name(fetch: &str, target: &str) -> bool {
         ) | (
             "Misty Rainforest",
             "Bayou"
+                | "Breeding Pool"
+                | "Dryad Arbor"
                 | "Hallowed Fountain"
                 | "Savannah"
                 | "Steam Vents"
@@ -4876,6 +7124,7 @@ fn fetch_can_get_name(fetch: &str, target: &str) -> bool {
             "Badlands"
                 | "Bayou"
                 | "Blood Crypt"
+                | "Breeding Pool"
                 | "Hallowed Fountain"
                 | "Scrubland"
                 | "Steam Vents"
@@ -4888,6 +7137,7 @@ fn fetch_can_get_name(fetch: &str, target: &str) -> bool {
             "Scalding Tarn",
             "Badlands"
                 | "Blood Crypt"
+                | "Breeding Pool"
                 | "Hallowed Fountain"
                 | "Plateau"
                 | "Steam Vents"
@@ -4902,6 +7152,8 @@ fn fetch_can_get_name(fetch: &str, target: &str) -> bool {
             "Badlands"
                 | "Bayou"
                 | "Blood Crypt"
+                | "Breeding Pool"
+                | "Dryad Arbor"
                 | "Savannah"
                 | "Scrubland"
                 | "Taiga"
@@ -4911,6 +7163,8 @@ fn fetch_can_get_name(fetch: &str, target: &str) -> bool {
         ) | (
             "Windswept Heath",
             "Bayou"
+                | "Breeding Pool"
+                | "Dryad Arbor"
                 | "Hallowed Fountain"
                 | "Plateau"
                 | "Savannah"
@@ -4923,6 +7177,8 @@ fn fetch_can_get_name(fetch: &str, target: &str) -> bool {
             "Badlands"
                 | "Bayou"
                 | "Blood Crypt"
+                | "Breeding Pool"
+                | "Dryad Arbor"
                 | "Plateau"
                 | "Savannah"
                 | "Steam Vents"
@@ -4935,13 +7191,17 @@ fn fetch_can_get_name(fetch: &str, target: &str) -> bool {
 
 pub(crate) fn card_color_mask(card: &str) -> u8 {
     color_mask(match card {
+        "Ad Nauseam" => "B",
         "Angel's Grace" => "W",
         "An Offer You Can't Refuse" => "U",
+        "Badgermole Cub" => "G",
         "Beseech the Mirror" => "B",
         "Birgi, God of Storytelling" => "R",
         "Birds of Paradise" => "G",
         "Borne Upon a Wind" => "U",
         "Brain Freeze" => "U",
+        "Cabal Ritual" => "B",
+        "Chord of Calling" => "G",
         "Chain of Vapor" => "U",
         "Clever Impersonator" => "U",
         "Commandeer" => "U",
@@ -4949,11 +7209,16 @@ pub(crate) fn card_color_mask(card: &str) -> u8 {
         "Crop Rotation" => "G",
         "Culling the Weak" => "B",
         "Curse of Opulence" => "R",
+        "Cryptolith Rite" => "G",
+        "Daze" => "U",
         "Dark Ritual" => "B",
         "Deathrite Shaman" => "BG",
         "Deflecting Swat" => "R",
-        "Demonic Tutor" => "B",
+        "Demonic Consultation" | "Demonic Counsel" | "Demonic Tutor" => "B",
         "Diabolic Intent" => "B",
+        "Dramatic Reversal" => "U",
+        "Dryad Arbor" => "G",
+        "Earthcraft" => "G",
         "Dispel" => "U",
         "Disrupting Shoal" => "U",
         "Eldritch Evolution" => "G",
@@ -4963,6 +7228,9 @@ pub(crate) fn card_color_mask(card: &str) -> u8 {
         "Faerie Mastermind" => "U",
         "Fierce Guardianship" => "U",
         "Firestorm" => "R",
+        "Final Fortune" => "R",
+        "Finale of Devastation" => "G",
+        "Flare of Duplication" => "R",
         "Flash Photography" => "U",
         "Flesh Duplicate" => "U",
         "Flusterstorm" => "U",
@@ -4970,12 +7238,15 @@ pub(crate) fn card_color_mask(card: &str) -> u8 {
         "Force of Will" => "U",
         "Flashback" => "R",
         "Gamble" => "R",
+        "Gene Pollinator" => "G",
         "Gifts Ungiven" => "U",
         "Gitaxian Probe" => "U",
         "Green Sun's Zenith" => "G",
         "Grim Tutor" => "B",
         "Heartwood Storyteller" => "G",
+        "Hydroelectric Specimen" => "U",
         "Hullbreaker Horror" => "U",
+        "Hexing Squelcher" => "R",
         "Idyllic Tutor" => "W",
         "Infernal Plunge" => "R",
         "Ignoble Hierarch" => "G",
@@ -4984,6 +7255,7 @@ pub(crate) fn card_color_mask(card: &str) -> u8 {
         "Into the Flood Maw" => "U",
         "Ishai, Ojutai Dragonspeaker" => "UW",
         "Jeska's Will" => "R",
+        "Kinnan, Bonder Prodigy" => "UG",
         "Lotho, Corrupt Shirriff" => "BW",
         "Manamorphose" => "RG",
         "Mental Misstep" => "U",
@@ -4994,7 +7266,9 @@ pub(crate) fn card_color_mask(card: &str) -> u8 {
         "Molten Disaster" => "R",
         "Mystic Remora" => "U",
         "Mystical Tutor" => "U",
+        "Mnemonic Betrayal" => "BU",
         "Nature's Chosen" => "G",
+        "Nature's Rhythm" => "G",
         "Necropotence" => "B",
         "Neoform" => "UG",
         "Nick Fury, Agent of S.H.I.E.L.D." => "W",
@@ -5004,11 +7278,12 @@ pub(crate) fn card_color_mask(card: &str) -> u8 {
         "Orim's Chant" => "W",
         "Pact of Negation" => "U",
         "Phyrexian Metamorph" => "U",
+        "Praetor's Grasp" => "B",
         "Pyroblast" => "R",
+        "Red Elemental Blast" => "R",
         "Ragavan, Nimble Pilferer" => "R",
         "Rain of Filth" => "B",
         "Ranger-Captain of Eos" => "W",
-        "Red Elemental Blast" => "R",
         "Redirect Lightning" => "R",
         "Rhystic Study" => "U",
         "Rite of Flame" => "R",
@@ -5017,6 +7292,7 @@ pub(crate) fn card_color_mask(card: &str) -> u8 {
         "Sevinne's Reclamation" => "W",
         "Silence" => "W",
         "Simian Spirit Guide" => "R",
+        "Shimmerwilds Growth" => "G",
         "Sink into Stupor" => "U",
         "Sink into Stupor // Soporific Springs" => "U",
         "Smothering Tithe" => "W",
@@ -5025,10 +7301,13 @@ pub(crate) fn card_color_mask(card: &str) -> u8 {
         "Street Wraith" => "B",
         "Strike It Rich" => "R",
         "Subtlety" => "U",
+        "Tainted Pact" => "B",
+        "Thassa's Oracle" => "U",
         "Sudden Substitution" => "U",
         "Summoner's Pact" => "G",
         "Swan Song" => "U",
         "Tataru Taru" => "W",
+        "Thrasios, Triton Hero" => "UG",
         "The Cabbage Merchant" => "G",
         "Tinder Wall" => "G",
         "Underworld Breach" => "R",
@@ -5037,6 +7316,9 @@ pub(crate) fn card_color_mask(card: &str) -> u8 {
         "Wan Shi Tong, Librarian" => "U",
         "Wild Cantor" => "RG",
         "Worldly Tutor" => "G",
+        "Wheel of Fortune" => "R",
+        "Windfall" => "U",
+        "Yawgmoth's Will" => "B",
         _ => "",
     })
 }
@@ -5614,7 +7896,7 @@ fn trace_tapped_perm_name(
     None
 }
 
-fn trace_perm_name(_ctx: &FastContext, perm: FastPerm) -> String {
+fn trace_perm_name(ctx: &FastContext, perm: FastPerm) -> String {
     match perm.kind_enum() {
         FastPermKind::Land => "land".to_string(),
         FastPermKind::CcLand => "Ancient Tomb".to_string(),
@@ -5662,6 +7944,28 @@ fn trace_perm_name(_ctx: &FastContext, perm: FastPerm) -> String {
         FastPermKind::Wan => "Wan Shi Tong, Librarian".to_string(),
         FastPermKind::Ishai => "Ishai, Ojutai Dragonspeaker".to_string(),
         FastPermKind::Artifact => "artifact".to_string(),
+        FastPermKind::Star => "Chromatic Star".to_string(),
+        FastPermKind::Grim => "Grim Monolith".to_string(),
+        FastPermKind::Talisman => "Talisman of Dominance".to_string(),
+        FastPermKind::Amulet => "Jeweled Amulet".to_string(),
+        FastPermKind::Bauble => "Vexing Bauble".to_string(),
+        FastPermKind::Curse => "Curse of Opulence".to_string(),
+        FastPermKind::Thrasios => "Thrasios, Triton Hero".to_string(),
+        FastPermKind::Badgermole => "Badgermole Cub".to_string(),
+        FastPermKind::Kinnan => "Kinnan, Bonder Prodigy".to_string(),
+        FastPermKind::Pollinator => "Gene Pollinator".to_string(),
+        FastPermKind::StormKiln => "Storm-Kiln Artist".to_string(),
+        FastPermKind::DryadArbor => "Dryad Arbor".to_string(),
+        FastPermKind::Cradle => "Gaea's Cradle".to_string(),
+        FastPermKind::BasicForest => "Forest".to_string(),
+        FastPermKind::ForestLand => "Forest land".to_string(),
+        FastPermKind::Woodland => "Shifting Woodland".to_string(),
+        FastPermKind::EarthbentLand => "earthbent land".to_string(),
+        FastPermKind::Cryptolith => "Cryptolith Rite".to_string(),
+        FastPermKind::Earthcraft => "Earthcraft".to_string(),
+        FastPermKind::Shimmer => "Shimmerwilds Growth".to_string(),
+        FastPermKind::FetchLand => ctx.interned_string(perm.extra_id()).to_string(),
+        FastPermKind::Breach => "Underworld Breach".to_string(),
         FastPermKind::Unknown => "permanent".to_string(),
     }
 }
@@ -5732,6 +8036,9 @@ fn success_label_fast(
             None
         }
     }?;
+    if label == "Underworld Breach combo" {
+        return Some(label);
+    }
     if can_survive_next_pact_upkeep_fast(ctx, request, state) {
         Some(label)
     } else {
@@ -5744,6 +8051,9 @@ fn engine_success_label_fast(
     request: &CloseTurnRequest,
     state: &FastState,
 ) -> Option<String> {
+    if state.turn() <= request.max_turns && breach_combo_live_fast(ctx, state) {
+        return Some("Underworld Breach combo".to_string());
+    }
     if request.engine_success_policy == "count" {
         if state.engine_count() < request.engine_target_count {
             return None;
@@ -5779,6 +8089,25 @@ fn engine_success_label_fast(
         }
     }
     candidates.into_iter().min().map(|(_, _, name)| name)
+}
+
+fn breach_combo_live_fast(ctx: &FastContext, state: &FastState) -> bool {
+    if !state
+        .battlefield
+        .iter()
+        .any(|perm| perm.kind_enum() == FastPermKind::Breach)
+        || state.graveyard.len() < 8
+    {
+        return false;
+    }
+    let Some(brain_freeze) = ctx.card_id("Brain Freeze") else {
+        return false;
+    };
+    let Some(led) = ctx.card_id("Lion's Eye Diamond") else {
+        return false;
+    };
+    state.graveyard.binary_search(&brain_freeze).is_ok()
+        && state.graveyard.binary_search(&led).is_ok()
 }
 
 fn best_engine_name_fast(ctx: &FastContext, state: &FastState) -> Option<String> {
@@ -6113,7 +8442,9 @@ fn future_visible_setup_states_fast(ctx: &mut FastContext, state: &FastState) ->
         .collect();
     cards.sort_unstable();
     for card in cards {
-        for (perm, library, grave_inc) in land_options_fast(ctx, card, &state.library) {
+        for (perm, library, grave_inc) in
+            land_options_fast(ctx, card, &state.library, controls_forest_fast(state))
+        {
             let mut next = state.clone();
             next.remove_hand_card(card);
             next.library = library;
@@ -6143,18 +8474,21 @@ fn begin_turn_fast(ctx: &mut FastContext, state: &FastState) -> FastState {
     let mut next = state.clone();
     for index in 0..next.battlefield.len() {
         let perm = next.battlefield[index];
-        let tapped = if matches!(perm.kind_enum(), FastPermKind::Vault) {
+        let tapped = if matches!(perm.kind_enum(), FastPermKind::Vault | FastPermKind::Grim) {
             perm.tapped()
         } else {
             false
         };
-        next.battlefield[index] = make_perm(
-            ctx,
-            perm.kind_enum(),
-            tapped,
-            perm.colors(),
-            false,
-            perm.counters(),
+        next.battlefield[index] = preserve_perm_markers(
+            make_perm(
+                ctx,
+                perm.kind_enum(),
+                tapped,
+                perm.colors(),
+                false,
+                perm.counters(),
+            ),
+            perm,
         );
     }
     sort_fast_battlefield(ctx, &mut next.battlefield);
@@ -6169,6 +8503,24 @@ fn begin_turn_fast(ctx: &mut FastContext, state: &FastState) -> FastState {
 
 fn end_turn_fast(ctx: &mut FastContext, state: &FastState) -> FastState {
     let mut next = state.clone();
+    let expired = next.jeska_exile.clone();
+    for card in expired {
+        next.remove_hand_card(card);
+    }
+    next.jeska_exile.clear();
+    if next.flag(FastState::NECRO_PENDING) {
+        for _ in 0..30 {
+            next = draw_card_fast(next);
+        }
+        next.set_flag(FastState::NECRO_PENDING, false);
+    }
+    while let Some(index) = next
+        .battlefield
+        .iter()
+        .position(|perm| perm.kind_enum() == FastPermKind::Breach)
+    {
+        remove_perm_to_graveyard(ctx, &mut next, index);
+    }
     if next
         .battlefield
         .iter()
@@ -6200,7 +8552,8 @@ fn draw_card_fast(mut state: FastState) -> FastState {
 pub fn solve_keep_fast(request: &SolveKeepRequest) -> SolveKeepResponse {
     let mut card_names = request.hand.clone();
     card_names.extend(request.library.iter().cloned());
-    let mut ctx = FastContext::with_card_names(card_names);
+    let mut ctx =
+        FastContext::with_card_names_and_commander(card_names, request.commander.as_deref());
     let config = FastSearchConfig::from_solve_request(request);
     solve_keep_fast_with_ctx(
         &mut ctx,
@@ -6221,7 +8574,8 @@ pub fn solve_keep_fast(request: &SolveKeepRequest) -> SolveKeepResponse {
 pub fn solve_keep_trace_fast(request: &SolveKeepRequest) -> SolveKeepTraceFastResponse {
     let mut card_names = request.hand.clone();
     card_names.extend(request.library.iter().cloned());
-    let mut ctx = FastContext::with_card_names(card_names);
+    let mut ctx =
+        FastContext::with_card_names_and_commander(card_names, request.commander.as_deref());
     let config = FastSearchConfig::from_solve_request(request);
     let traced = solve_keep_trace_fast_with_ctx(
         &mut ctx,
@@ -6262,8 +8616,12 @@ pub fn solve_keep_batch_fast_with_workers(
         card_names.extend(request.library.iter().cloned());
     }
     let worker_count = workers.max(1).min(requests.len());
+    let commander = requests[0].commander.as_deref();
+    debug_assert!(requests
+        .iter()
+        .all(|request| request.commander.as_deref() == commander));
     if worker_count == 1 {
-        let mut ctx = FastContext::with_card_names(card_names);
+        let mut ctx = FastContext::with_card_names_and_commander(card_names, commander);
         return requests
             .iter()
             .map(|request| {
@@ -6291,7 +8649,7 @@ pub fn solve_keep_batch_fast_with_workers(
         let mut handles = Vec::with_capacity(worker_count);
         for _ in 0..worker_count {
             handles.push(scope.spawn(|| {
-                let mut ctx = FastContext::with_card_names(&card_names);
+                let mut ctx = FastContext::with_card_names_and_commander(&card_names, commander);
                 let mut local = Vec::new();
                 loop {
                     let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -6348,7 +8706,10 @@ pub fn earliest_fast(request: &EarliestRequest) -> SolveKeepResponse {
         };
     }
 
-    let mut ctx = FastContext::with_card_names(request.deck_order.iter().cloned());
+    let mut ctx = FastContext::with_card_names_and_commander(
+        request.deck_order.iter().cloned(),
+        request.commander.as_deref(),
+    );
     let config = FastSearchConfig::from_earliest_request(request);
     let hand7 = &request.deck_order[..7];
     let rest = &request.deck_order[7..];
@@ -6585,6 +8946,8 @@ fn policy_outcome_hit_score(
     match (label, turn) {
         (Some("Rhystic Study"), Some(1)) => request.rhystic_t1_weight,
         (Some("Rhystic Study"), Some(2)) => request.rhystic_t2_weight,
+        (Some("Underworld Breach combo"), Some(1)) => request.rhystic_t1_weight,
+        (Some("Underworld Breach combo"), Some(2)) => request.rhystic_t2_weight,
         (Some("Heartwood Storyteller"), Some(1)) => request.heartwood_t1_weight,
         (Some("Heartwood Storyteller"), Some(2)) => request.heartwood_t2_weight,
         _ => 0.0,
@@ -7146,7 +9509,8 @@ pub fn evaluate_visible_hand_batch_fast(
     for task in &request.tasks {
         card_names.extend(task.hand.iter().cloned());
     }
-    let mut ctx = FastContext::with_card_names(card_names);
+    let mut ctx =
+        FastContext::with_card_names_and_commander(card_names, request.commander.as_deref());
     let config = FastSearchConfig::from_parts(
         request.gamble_mode.as_deref(),
         None,
@@ -7176,6 +9540,10 @@ fn rng_metadata() -> BTreeMap<String, String> {
         (
             "float_draw".to_string(),
             "rand Rng::gen::<f64>() on domain-separated ChaCha20 stream".to_string(),
+        ),
+        (
+            "policy_game_indexing".to_string(),
+            "global game index independent of process or internal shard boundaries".to_string(),
         ),
         (
             "domains".to_string(),
@@ -7291,16 +9659,6 @@ fn split_even_counts(total: usize, shards: usize) -> Vec<usize> {
         .map(|index| base + usize::from(index < extra))
         .filter(|count| *count > 0)
         .collect()
-}
-
-fn python_compat_stable_seed(parts: &[String]) -> u64 {
-    let mut hasher = Blake2bVar::new(8).expect("valid digest size");
-    hasher.update(parts.join("|").as_bytes());
-    let mut digest = [0u8; 8];
-    hasher
-        .finalize_variable(&mut digest)
-        .expect("digest output size");
-    u64::from_be_bytes(digest)
 }
 
 fn add_count_maps(target: &mut BTreeMap<String, usize>, source: &BTreeMap<String, usize>) {
@@ -7490,13 +9848,7 @@ fn evaluate_policy_fast_sharded(request: &PolicyEvalFastRequest) -> PolicyEvalFa
     let mut specs = Vec::with_capacity(shard_count);
     let mut game_offset = 0usize;
     for (shard_index, shard_games) in shard_counts.into_iter().enumerate() {
-        let seed_parts = vec![
-            request.seed.to_string(),
-            "rust-full-sim-shard".to_string(),
-            shard_index.to_string(),
-        ];
-        let shard_seed = python_compat_stable_seed(&seed_parts);
-        specs.push((shard_index, game_offset, shard_games, shard_seed));
+        specs.push((shard_index, game_offset, shard_games));
         game_offset += shard_games;
     }
 
@@ -7509,12 +9861,12 @@ fn evaluate_policy_fast_sharded(request: &PolicyEvalFastRequest) -> PolicyEvalFa
         let request = request.clone();
         handles.push(std::thread::spawn(move || loop {
             let spec = specs.lock().expect("internal shard queue lock").pop_front();
-            let Some((shard_index, shard_offset, shard_games, shard_seed)) = spec else {
+            let Some((shard_index, shard_offset, shard_games)) = spec else {
                 break;
             };
             let mut shard_request = request.clone();
             shard_request.games = shard_games;
-            shard_request.seed = shard_seed;
+            shard_request.game_offset = request.game_offset + shard_offset;
             shard_request.internal_shards = 1;
             shard_request.internal_shard_workers = 1;
             let response = evaluate_policy_fast(&shard_request);
@@ -7563,7 +9915,8 @@ pub fn evaluate_policy_fast(request: &PolicyEvalFastRequest) -> PolicyEvalFastRe
 
     let mut card_names = request.deck.clone();
     card_names.push("Blank".to_string());
-    let mut ctx = FastContext::with_card_names(card_names);
+    let mut ctx =
+        FastContext::with_card_names_and_commander(card_names, request.commander.as_deref());
     let config = FastSearchConfig::from_parts(
         request.gamble_mode.as_deref(),
         None,
@@ -7571,6 +9924,7 @@ pub fn evaluate_policy_fast(request: &PolicyEvalFastRequest) -> PolicyEvalFastRe
     );
     let visible_request = VisibleHandBatchRequest {
         deck: request.deck.clone(),
+        commander: request.commander.clone(),
         tasks: Vec::new(),
         state_limit: request.state_limit,
         samples_per_bottom: request.samples_per_bottom,
@@ -7593,7 +9947,11 @@ pub fn evaluate_policy_fast(request: &PolicyEvalFastRequest) -> PolicyEvalFastRe
 
     let gemstone_live_by_game: Vec<bool> = (0..request.games)
         .map(|game_index| {
-            policy_gemstone_live(request.seed, request.gemstone_caverns_live_rate, game_index)
+            policy_gemstone_live(
+                request.seed,
+                request.gemstone_caverns_live_rate,
+                request.game_offset + game_index,
+            )
         })
         .collect();
     let mut active: Vec<usize> = (0..request.games).collect();
@@ -7648,13 +10006,14 @@ pub fn evaluate_policy_fast(request: &PolicyEvalFastRequest) -> PolicyEvalFastRe
         }
         let mut next_active = Vec::new();
         for game_index in active {
+            let global_game_index = request.game_offset + game_index;
             let gemstone_live = gemstone_live_by_game[game_index];
-            let order = policy_shuffle_order(&request.deck, request.seed, game_index, stage);
+            let order = policy_shuffle_order(&request.deck, request.seed, global_game_index, stage);
             let mut hand = order[..7].to_vec();
             hand.sort();
             let cache_key = visible_cache_key(stage, bottom_count, gemstone_live, &hand);
             if !visible_cache.contains_key(&cache_key) {
-                let seed_parts = vec![game_index.to_string(), stage.to_string(), cache_key.clone()];
+                let seed_parts = vec![stage.to_string(), cache_key.clone()];
                 let task = VisibleHandTaskRequest {
                     key: cache_key.clone(),
                     hand: hand.clone(),
@@ -7719,8 +10078,11 @@ pub fn evaluate_policy_fast(request: &PolicyEvalFastRequest) -> PolicyEvalFastRe
                 .collect();
             let mut library = order[7..].to_vec();
             library.extend(ev_row.best_bottom.iter().cloned());
-            let actual_seed_parts =
-                vec![game_index.to_string(), stage.to_string(), cache_key.clone()];
+            let actual_seed_parts = vec![
+                global_game_index.to_string(),
+                stage.to_string(),
+                cache_key.clone(),
+            ];
             let actual_seed =
                 rust_stable_seed(request.seed, "policy_actual", &actual_seed_parts, None);
             let actual_config = FastSearchConfig {
@@ -8168,6 +10530,7 @@ pub fn evaluate_policy_threshold_sweep_fast(
     );
     let visible_request = VisibleHandBatchRequest {
         deck: request.deck.clone(),
+        commander: None,
         tasks: Vec::new(),
         state_limit: request.state_limit,
         samples_per_bottom: request.samples_per_bottom,
@@ -8464,10 +10827,12 @@ fn unsupported_sim_response(
         evaluation: unsupported_policy_response(
             &PolicyEvalFastRequest {
                 deck: request.deck.clone(),
+                commander: request.commander.clone(),
                 thresholds_dead: vec![0.0; COMMANDER_MULLIGAN_BOTTOMS_FAST.len()],
                 thresholds_live: vec![0.0; COMMANDER_MULLIGAN_BOTTOMS_FAST.len()],
                 games: request.eval_games,
                 seed: request.eval_seed.unwrap_or(request.seed),
+                game_offset: 0,
                 gemstone_caverns_live_rate: request.gemstone_caverns_live_rate,
                 state_limit: request.state_limit,
                 actual_rerun_state_limit: request.actual_rerun_state_limit,
@@ -8513,7 +10878,8 @@ pub fn simulate_policy_fast(request: &PolicySimFastRequest) -> PolicySimFastResp
 
     let mut card_names = request.deck.clone();
     card_names.push("Blank".to_string());
-    let mut ctx = FastContext::with_card_names(card_names);
+    let mut ctx =
+        FastContext::with_card_names_and_commander(card_names, request.commander.as_deref());
     let config = FastSearchConfig::from_parts(
         request.gamble_mode.as_deref(),
         None,
@@ -8521,6 +10887,7 @@ pub fn simulate_policy_fast(request: &PolicySimFastRequest) -> PolicySimFastResp
     );
     let visible_request = VisibleHandBatchRequest {
         deck: request.deck.clone(),
+        commander: request.commander.clone(),
         tasks: Vec::new(),
         state_limit: request.state_limit,
         samples_per_bottom: request.samples_per_bottom,
@@ -8610,10 +10977,12 @@ pub fn simulate_policy_fast(request: &PolicySimFastRequest) -> PolicySimFastResp
     let (thresholds_live, threshold_rows_live) = compute_thresholds_from_values(&live_values);
     let evaluation_request = PolicyEvalFastRequest {
         deck: request.deck.clone(),
+        commander: request.commander.clone(),
         thresholds_dead: thresholds_dead.clone(),
         thresholds_live: thresholds_live.clone(),
         games: request.eval_games,
         seed: request.eval_seed.unwrap_or(request.seed),
+        game_offset: 0,
         gemstone_caverns_live_rate: request.gemstone_caverns_live_rate,
         state_limit: request.state_limit,
         actual_rerun_state_limit: request.actual_rerun_state_limit,
@@ -8773,6 +11142,8 @@ fn raw_delta_score(request: &RawDeltaFastRequest, response: &SolveKeepResponse) 
         match (response.label.as_deref(), turn) {
             (Some("Rhystic Study"), 1) => request.rhystic_t1_weight,
             (Some("Rhystic Study"), 2) => request.rhystic_t2_weight,
+            (Some("Underworld Breach combo"), 1) => request.rhystic_t1_weight,
+            (Some("Underworld Breach combo"), 2) => request.rhystic_t2_weight,
             (Some("Heartwood Storyteller"), 1) => request.heartwood_t1_weight,
             (Some("Heartwood Storyteller"), 2) => request.heartwood_t2_weight,
             _ => 0.0,
@@ -8960,14 +11331,17 @@ fn raw_delta_is_any_search(card: &str) -> bool {
             | "Crop Rotation"
             | "Demonic Tutor"
             | "Diabolic Intent"
+            | "Chord of Calling"
             | "Eldritch Evolution"
             | "Enlightened Tutor"
             | "Gamble"
             | "Green Sun's Zenith"
+            | "Finale of Devastation"
             | "Grim Tutor"
             | "Idyllic Tutor"
             | "Imperial Seal"
             | "Mystical Tutor"
+            | "Nature's Rhythm"
             | "Neoform"
             | "Ranger-Captain of Eos"
             | "Scheming Symmetry"
@@ -9053,8 +11427,14 @@ fn raw_delta_typed_search_can_reach(search: &str, target: &str) -> bool {
             is_artifact_card_name(target) || raw_delta_is_enchantment(target)
         }
         "Mystical Tutor" => raw_delta_is_instant_or_sorcery(target),
-        "Worldly Tutor" | "Summoner's Pact" | "Green Sun's Zenith" | "Eldritch Evolution"
-        | "Neoform" => raw_delta_is_creature(target),
+        "Worldly Tutor"
+        | "Summoner's Pact"
+        | "Green Sun's Zenith"
+        | "Eldritch Evolution"
+        | "Neoform"
+        | "Chord of Calling"
+        | "Finale of Devastation"
+        | "Nature's Rhythm" => raw_delta_is_creature(target),
         "Ranger-Captain of Eos" => target == "Esper Sentinel",
         _ => false,
     }
@@ -9939,6 +12319,7 @@ fn starting_state_options_fast(
         engine_targets: 0,
         graveyard: SmallVec::new(),
         hand,
+        jeska_exile: SmallVec::new(),
         library,
         mana: PackedMana::zero(),
         mantle_attached: SmallVec::new(),
@@ -10006,6 +12387,7 @@ fn starting_state_options_fast_with_trace(
         engine_targets: 0,
         graveyard: SmallVec::new(),
         hand,
+        jeska_exile: SmallVec::new(),
         library,
         mana: PackedMana::zero(),
         mantle_attached: SmallVec::new(),
@@ -10361,7 +12743,8 @@ fn library_order_matters(ctx: &FastContext, hand: &[CardId]) -> bool {
     hand.iter().any(|id| {
         matches!(
             ctx.card_name(*id),
-            "Gitaxian Probe"
+            "Brain Freeze"
+                | "Gitaxian Probe"
                 | "Manamorphose"
                 | "Noxious Revival"
                 | "Street Wraith"
@@ -10534,6 +12917,7 @@ mod tests {
             gamble_mode: None,
             gamble_seed: None,
             simplified_gamble: true,
+            commander: None,
         };
         let requests = vec![
             request(&["Ancient Tomb", "Lotus Petal", "Rhystic Study"]),
@@ -10595,6 +12979,714 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(nick.colors(), color_mask("W"));
         assert_eq!(colors, vec![3]);
+    }
+
+    #[test]
+    fn rograkh_is_free_red_and_accumulates_commander_tax() {
+        let mut context = FastContext::with_card_names_and_commander(
+            Vec::<String>::new(),
+            Some("Rograkh, Son of Rohgahh"),
+        );
+        let state = FastState::from_fixture(&mut context, &fixture_state(Vec::new()));
+        let mut actions = Vec::new();
+        generate_fast_commander_actions(&mut context, &mut actions, &state);
+        assert_eq!(actions.len(), 1);
+        let mut cast = actions.pop().unwrap().next_state;
+        assert_eq!(cast.commander_cast_count(), 1);
+        let rog = cast
+            .battlefield
+            .iter()
+            .position(|permanent| permanent.kind_enum() == FastPermKind::Rog)
+            .expect("Rograkh permanent");
+        assert_eq!(cast.battlefield[rog].colors(), color_mask("R"));
+        cast.remove_perm(&context, rog);
+        actions.clear();
+        generate_fast_commander_actions(&mut context, &mut actions, &cast);
+        assert!(
+            actions.is_empty(),
+            "second Rograkh cast costs two generic mana"
+        );
+    }
+
+    #[test]
+    fn rograkh_silas_identity_limits_tower_and_signet_to_grixis() {
+        let mut context = FastContext::with_card_names_and_commander(
+            ["Command Tower", "Arcane Signet"],
+            Some("Rograkh, Son of Rohgahh"),
+        );
+        let tower_card = context.card_id("Command Tower").unwrap();
+        let tower = land_options_fast(
+            &mut context,
+            tower_card,
+            &PersistentLibrary::default(),
+            false,
+        )[0]
+        .0;
+        assert_eq!(tower.colors(), color_mask("BRU"));
+
+        let identity = context.commander_identity_colors();
+        let signet = make_perm(
+            &mut context,
+            FastPermKind::Signet,
+            false,
+            identity,
+            false,
+            0,
+        );
+        let state = FastState::from_fixture(&mut context, &fixture_state(Vec::new()));
+        let colors = fast_tap_options(&state, signet)
+            .into_iter()
+            .filter_map(|tap| match tap {
+                FastTap::Color(color) => Some(color),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(colors, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn grim_monolith_and_cabal_ritual_generate_their_oracle_mana() {
+        let mut context = FastContext::with_card_names(["Cabal Ritual"]);
+        let grim = make_perm(&mut context, FastPermKind::Grim, false, 0, false, 0);
+        let mut state = FastState::from_fixture(&mut context, &fixture_state(Vec::new()));
+        state.push_perm(&context, grim);
+        let mut actions = Vec::new();
+        generate_fast_mana_actions(&mut context, &mut actions, &state);
+        assert!(actions
+            .iter()
+            .any(|action| action.next_state.mana() == [0, 0, 0, 0, 0, 3]));
+
+        state.add_hand_card(context.card_id("Cabal Ritual").unwrap());
+        state.set_mana([1, 0, 0, 0, 0, 1]);
+        actions.clear();
+        generate_fast_ritual_actions(&mut context, &mut actions, &state);
+        assert!(actions
+            .iter()
+            .any(|action| action.next_state.mana()[0] == 3));
+    }
+
+    #[test]
+    fn dramatic_reversal_untaps_only_nonlands_without_granting_haste() {
+        let mut context = FastContext::with_card_names(["Dramatic Reversal"]);
+        let dramatic = context.card_id("Dramatic Reversal").unwrap();
+        let mut state = FastState::from_fixture(&mut context, &fixture_state(Vec::new()));
+        state.add_hand_card(dramatic);
+        state.set_mana([0, 0, 1, 0, 0, 1]);
+        let sol = make_perm(&mut context, FastPermKind::Sol, true, 0, false, 0);
+        let vault = make_perm(&mut context, FastPermKind::Vault, true, 0, false, 0);
+        let bird = make_perm(
+            &mut context,
+            FastPermKind::Bird,
+            true,
+            color_mask("G"),
+            true,
+            0,
+        );
+        let land = make_perm(
+            &mut context,
+            FastPermKind::Land,
+            true,
+            color_mask("U"),
+            false,
+            0,
+        );
+        state.push_perm(&context, sol);
+        state.push_perm(&context, vault);
+        state.push_perm(&context, bird);
+        state.push_perm(&context, land);
+
+        let mut actions = Vec::new();
+        generate_fast_turbo_opening_actions(&mut context, &mut actions, &state);
+        let cast = actions
+            .into_iter()
+            .find(|action| !action.next_state.has_card(Some(dramatic)))
+            .expect("cast Dramatic Reversal");
+
+        assert_eq!(cast.next_state.mana(), [0; 6]);
+        for permanent in &cast.next_state.battlefield {
+            if permanent.kind_enum().is_land() {
+                assert!(permanent.tapped());
+            } else {
+                assert!(!permanent.tapped());
+            }
+        }
+        let bird = cast
+            .next_state
+            .battlefield
+            .iter()
+            .find(|permanent| permanent.kind_enum() == FastPermKind::Bird)
+            .expect("Birds of Paradise remains on the battlefield");
+        assert!(bird.fresh());
+        assert!(fast_tap_options(&cast.next_state, *bird).is_empty());
+    }
+
+    #[test]
+    fn extended_permanent_encoding_preserves_high_kind_and_land_markers() {
+        let perm = FastPerm::new(
+            FastPermKind::FetchLand,
+            false,
+            true,
+            color_mask("UG"),
+            3,
+            17,
+        )
+        .with_earthbent(true)
+        .with_shimmer_color(2);
+        assert_eq!(perm.kind_enum(), FastPermKind::FetchLand);
+        assert!(perm.earthbent());
+        assert_eq!(perm.shimmer_color(), Some(2));
+        assert_eq!(perm.colors(), color_mask("UG"));
+        assert_eq!(perm.counters(), 3);
+        assert_eq!(perm.extra_id(), 17);
+    }
+
+    #[test]
+    fn dryad_arbor_has_summoning_sickness_and_earthbend_grants_haste() {
+        let mut context = FastContext::with_card_names(["Dryad Arbor", "Badgermole Cub"]);
+        let dryad = make_perm(
+            &mut context,
+            FastPermKind::DryadArbor,
+            false,
+            color_mask("G"),
+            true,
+            0,
+        );
+        let mut state = FastState::from_fixture(&mut context, &fixture_state(Vec::new()));
+        state.push_perm(&context, dryad);
+        assert!(fast_tap_options(&state, dryad).is_empty());
+
+        state.battlefield[0] = dryad.with_earthbent(true).with_fresh(false);
+        assert!(!fast_tap_options(&state, state.battlefield[0]).is_empty());
+    }
+
+    #[test]
+    fn badgermole_and_kinnan_apply_only_to_their_oracle_tap_sources() {
+        let mut context = FastContext::with_card_names([
+            "Badgermole Cub",
+            "Birds of Paradise",
+            "Kinnan, Bonder Prodigy",
+            "Springleaf Drum",
+        ]);
+        let mut state = FastState::from_fixture(&mut context, &fixture_state(Vec::new()));
+        let badger = creature_perm_fast(&mut context, "Badgermole Cub").with_fresh(false);
+        let kinnan = creature_perm_fast(&mut context, "Kinnan, Bonder Prodigy").with_fresh(false);
+        let bird = creature_perm_fast(&mut context, "Birds of Paradise").with_fresh(false);
+        let drum = make_perm(&mut context, FastPermKind::Drum, false, 0, false, 0);
+        state.push_perm(&context, badger);
+        state.push_perm(&context, kinnan);
+        state.push_perm(&context, bird);
+        state.push_perm(&context, drum);
+
+        assert_eq!(
+            mana_with_tap_bonuses(&state, bird, [0, 0, 1, 0, 0, 0], true),
+            [0, 0, 2, 0, 1, 0]
+        );
+        assert_eq!(
+            mana_with_tap_bonuses(&state, drum, [0, 0, 1, 0, 0, 0], false),
+            [0, 0, 2, 0, 0, 0]
+        );
+        let dryad = make_perm(
+            &mut context,
+            FastPermKind::DryadArbor,
+            false,
+            color_mask("G"),
+            false,
+            0,
+        );
+        assert_eq!(
+            mana_with_tap_bonuses(&state, dryad, [0, 0, 0, 0, 1, 0], true),
+            [0, 0, 0, 0, 2, 0]
+        );
+    }
+
+    #[test]
+    fn earthbent_land_returns_tapped_instead_of_remaining_in_graveyard() {
+        let mut context = FastContext::with_card_names(["Forest"]);
+        let forest = make_perm(
+            &mut context,
+            FastPermKind::BasicForest,
+            false,
+            color_mask("G"),
+            false,
+            0,
+        )
+        .with_earthbent(true);
+        let mut state = FastState::from_fixture(&mut context, &fixture_state(Vec::new()));
+        state.push_perm(&context, forest);
+        remove_land_perm_to_graveyard(&context, &mut state, 0);
+        assert_eq!(state.battlefield.len(), 1);
+        assert!(state.battlefield[0].tapped());
+        assert!(!state.battlefield[0].earthbent());
+        assert_eq!(state.land_grave_count, 0);
+    }
+
+    #[test]
+    fn rograkh_thrasios_pair_exposes_both_casts_and_temur_identity() {
+        let mut context = FastContext::with_card_names_and_commander(
+            Vec::<String>::new(),
+            Some("Rograkh, Son of Rohgahh + Thrasios, Triton Hero"),
+        );
+        assert_eq!(context.commander_identity_colors(), color_mask("RUG"));
+        let state = FastState::from_fixture(&mut context, &fixture_state(Vec::new()));
+        let mut actions = Vec::new();
+        generate_fast_commander_actions(&mut context, &mut actions, &state);
+        assert_eq!(actions.len(), 1, "only free Rograkh is currently payable");
+        assert!(actions[0]
+            .next_state
+            .battlefield
+            .iter()
+            .any(|perm| perm.kind_enum() == FastPermKind::Rog));
+
+        let mut funded = state;
+        funded.set_mana([0, 0, 1, 0, 1, 0]);
+        actions.clear();
+        generate_fast_commander_actions(&mut context, &mut actions, &funded);
+        assert!(actions.iter().any(|action| action
+            .next_state
+            .battlefield
+            .iter()
+            .any(|perm| perm.kind_enum() == FastPermKind::Thrasios)));
+    }
+
+    #[test]
+    fn cradle_earthcraft_and_shimmer_preserve_distinct_land_rules() {
+        let mut context = FastContext::with_card_names(["Forest", "Gaea's Cradle"]);
+        let mut state = FastState::from_fixture(&mut context, &fixture_state(Vec::new()));
+        let forest = make_perm(
+            &mut context,
+            FastPermKind::BasicForest,
+            true,
+            color_mask("G"),
+            false,
+            0,
+        );
+        let cradle = make_perm(
+            &mut context,
+            FastPermKind::Cradle,
+            false,
+            color_mask("G"),
+            false,
+            0,
+        )
+        .with_shimmer_color(2);
+        let rog = make_perm(
+            &mut context,
+            FastPermKind::Rog,
+            false,
+            color_mask("R"),
+            true,
+            0,
+        );
+        let earthcraft = make_perm(
+            &mut context,
+            FastPermKind::Earthcraft,
+            false,
+            color_mask("G"),
+            false,
+            0,
+        );
+        state.push_perm(&context, forest);
+        state.push_perm(&context, cradle);
+        state.push_perm(&context, rog);
+        state.push_perm(&context, earthcraft);
+
+        let mut actions = Vec::new();
+        generate_fast_mana_actions(&mut context, &mut actions, &state);
+        assert!(
+            actions.iter().any(|action| {
+                let mana = action.next_state.mana();
+                mana[4] == 1 && mana[2] == 1
+            }),
+            "Cradle counts Rograkh and Shimmer adds its chosen color"
+        );
+        assert!(
+            actions.iter().any(|action| {
+                action
+                    .next_state
+                    .battlefield
+                    .iter()
+                    .any(|perm| perm.kind_enum() == FastPermKind::BasicForest && !perm.tapped())
+                    && action
+                        .next_state
+                        .battlefield
+                        .iter()
+                        .any(|perm| perm.kind_enum() == FastPermKind::Rog && perm.tapped())
+            }),
+            "Earthcraft may tap fresh Rograkh to untap only the basic Forest"
+        );
+    }
+
+    #[test]
+    fn chord_convoke_can_tap_fresh_creatures_and_put_heartwood_into_play() {
+        let mut context = FastContext::with_card_names([
+            "Badgermole Cub",
+            "Birds of Paradise",
+            "Chord of Calling",
+            "Heartwood Storyteller",
+        ]);
+        let mut fixture = fixture_state(Vec::new());
+        fixture.hand = vec!["Chord of Calling".to_string()];
+        fixture.library = vec!["Heartwood Storyteller".to_string()];
+        let mut state = FastState::from_fixture(&mut context, &fixture);
+        let rog = make_perm(
+            &mut context,
+            FastPermKind::Rog,
+            false,
+            color_mask("R"),
+            true,
+            0,
+        );
+        let bird = creature_perm_fast(&mut context, "Birds of Paradise");
+        let badger = creature_perm_fast(&mut context, "Badgermole Cub");
+        state.push_perm(&context, rog);
+        state.push_perm(&context, bird);
+        state.push_perm(&context, badger);
+        state.set_mana([0, 0, 0, 0, 1, 2]);
+
+        let mut actions = Vec::new();
+        generate_fast_creature_battlefield_tutor_actions(&mut context, &mut actions, &state);
+        assert!(actions
+            .iter()
+            .any(|action| action.next_state.engine_count() > 0));
+    }
+
+    #[test]
+    fn storm_kiln_and_valley_trigger_only_from_the_cast_spell_type() {
+        let mut context = FastContext::with_card_names([
+            "Birds of Paradise",
+            "Rite of Flame",
+            "Storm-Kiln Artist",
+            "Valley Floodcaller",
+        ]);
+        let mut fixture = fixture_state(Vec::new());
+        fixture.hand = vec!["Rite of Flame".to_string()];
+        let state = FastState::from_fixture(&mut context, &fixture);
+        let mut before = state;
+        let storm = creature_perm_fast(&mut context, "Storm-Kiln Artist").with_fresh(false);
+        let bird = creature_perm_fast(&mut context, "Birds of Paradise")
+            .with_fresh(false)
+            .with_tapped(true);
+        let valley = creature_perm_fast(&mut context, "Valley Floodcaller")
+            .with_fresh(false)
+            .with_tapped(true);
+        before.push_perm(&context, storm);
+        before.push_perm(&context, bird);
+        before.push_perm(&context, valley);
+        let rite = context.card_id("Rite of Flame").unwrap();
+        let mut after = before.clone();
+        after.remove_hand_to_graveyard(&context, rite);
+        after = after_cast_fast(&mut context, &before, after);
+        assert_eq!(
+            after
+                .battlefield
+                .iter()
+                .filter(|perm| perm.kind_enum() == FastPermKind::Treasure)
+                .count(),
+            1
+        );
+        assert!(after
+            .battlefield
+            .iter()
+            .filter(|perm| matches!(perm.kind_enum(), FastPermKind::Bird | FastPermKind::Valley))
+            .all(|perm| !perm.tapped()));
+    }
+
+    #[test]
+    fn underworld_breach_escapes_engine_with_three_other_graveyard_cards() {
+        let mut context = FastContext::with_card_names([
+            "Blank A",
+            "Blank B",
+            "Blank C",
+            "Rhystic Study",
+            "Underworld Breach",
+        ]);
+        let mut state = FastState::from_fixture(&mut context, &fixture_state(Vec::new()));
+        for name in ["Blank A", "Blank B", "Blank C", "Rhystic Study"] {
+            state.add_graveyard_card(&context, context.card_id(name).unwrap());
+        }
+        let breach = make_perm(
+            &mut context,
+            FastPermKind::Breach,
+            false,
+            color_mask("R"),
+            false,
+            0,
+        );
+        state.push_perm(&context, breach);
+        state.set_mana([0, 0, 1, 0, 0, 2]);
+        let mut actions = Vec::new();
+        generate_fast_breach_escape_actions(
+            &mut context,
+            &mut actions,
+            &state,
+            &FastSearchConfig::default(),
+        );
+        assert!(actions
+            .iter()
+            .any(|action| action.next_state.engine_count() > 0));
+    }
+
+    #[test]
+    fn brain_freeze_counts_prior_spells_and_mills_actual_library() {
+        let mut context =
+            FastContext::with_card_names(["Brain Freeze", "Mill A", "Mill B", "Mill C", "Mill D"]);
+        let mut fixture = fixture_state(Vec::new());
+        fixture.hand = vec!["Brain Freeze".to_string()];
+        fixture.library = ["Mill A", "Mill B", "Mill C", "Mill D"]
+            .into_iter()
+            .cycle()
+            .take(12)
+            .map(str::to_string)
+            .collect();
+        fixture.mana = [0, 0, 2, 0, 0, 0];
+        fixture.spells_this_turn = 2;
+        let state = FastState::from_fixture(&mut context, &fixture);
+        let mut actions = Vec::new();
+        generate_fast_brain_freeze_actions(&mut context, &mut actions, &state);
+        let next = &actions[0].next_state;
+        assert_eq!(next.library.len(), 3);
+        assert_eq!(next.graveyard.len(), 10);
+        assert_eq!(next.spells_this_turn(), 3);
+        assert!(next
+            .graveyard
+            .binary_search(&context.card_id("Brain Freeze").unwrap())
+            .is_ok());
+    }
+
+    #[test]
+    fn escaped_rite_of_flame_returns_to_graveyard_after_resolution() {
+        let mut context = FastContext::with_card_names([
+            "Blank A",
+            "Blank B",
+            "Blank C",
+            "Rite of Flame",
+            "Underworld Breach",
+        ]);
+        let mut state = FastState::from_fixture(&mut context, &fixture_state(Vec::new()));
+        for name in ["Blank A", "Blank B", "Blank C", "Rite of Flame"] {
+            state.add_graveyard_card(&context, context.card_id(name).unwrap());
+        }
+        let breach = make_perm(
+            &mut context,
+            FastPermKind::Breach,
+            false,
+            color_mask("R"),
+            false,
+            0,
+        );
+        state.push_perm(&context, breach);
+        state.set_mana([0, 1, 0, 0, 0, 0]);
+        let mut actions = Vec::new();
+        generate_fast_breach_escape_actions(
+            &mut context,
+            &mut actions,
+            &state,
+            &FastSearchConfig::default(),
+        );
+        let rite = context.card_id("Rite of Flame").unwrap();
+        assert!(actions.iter().any(|action| {
+            action.next_state.graveyard.binary_search(&rite).is_ok()
+                && action.next_state.graveyard.len() == 1
+                && action.next_state.mana()[1] == 2
+        }));
+    }
+
+    #[test]
+    fn underworld_breach_is_sacrificed_at_end_step() {
+        let mut context = FastContext::with_card_names(["Underworld Breach"]);
+        let mut state = FastState::from_fixture(&mut context, &fixture_state(Vec::new()));
+        let breach_card = context.card_id("Underworld Breach").unwrap();
+        let breach = make_perm(
+            &mut context,
+            FastPermKind::Breach,
+            false,
+            color_mask("R"),
+            false,
+            0,
+        );
+        state.push_perm(&context, breach);
+        let ended = end_turn_fast(&mut context, &state);
+        assert!(!ended
+            .battlefield
+            .iter()
+            .any(|perm| perm.kind_enum() == FastPermKind::Breach));
+        assert!(ended.graveyard.binary_search(&breach_card).is_ok());
+    }
+
+    #[test]
+    fn breach_led_brain_freeze_bootstrap_reaches_proven_loop() {
+        let mut names = vec![
+            "Underworld Breach",
+            "Lion's Eye Diamond",
+            "Brain Freeze",
+            "Blank A",
+            "Blank B",
+            "Blank C",
+            "Blank D",
+        ];
+        names.extend(["Mill A", "Mill B", "Mill C", "Mill D"]);
+        let mut context = FastContext::with_card_names(names);
+        let mut fixture = fixture_state(Vec::new());
+        fixture.hand = [
+            "Underworld Breach",
+            "Lion's Eye Diamond",
+            "Brain Freeze",
+            "Blank A",
+            "Blank B",
+            "Blank C",
+            "Blank D",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        fixture.library = ["Mill A", "Mill B", "Mill C", "Mill D"]
+            .into_iter()
+            .cycle()
+            .take(20)
+            .map(str::to_string)
+            .collect();
+        fixture.mana = [0, 2, 0, 0, 0, 0];
+        let state = FastState::from_fixture(&mut context, &fixture);
+
+        let mut cast_breach = Vec::new();
+        generate_fast_turbo_opening_actions(&mut context, &mut cast_breach, &state);
+        let breached = cast_breach
+            .into_iter()
+            .map(|action| action.next_state)
+            .find(|next| {
+                next.battlefield
+                    .iter()
+                    .any(|perm| perm.kind_enum() == FastPermKind::Breach)
+            })
+            .unwrap();
+
+        let mut cast_led = Vec::new();
+        generate_fast_zero_artifact_actions(&mut context, &mut cast_led, &breached);
+        let led_in_play = cast_led
+            .into_iter()
+            .map(|action| action.next_state)
+            .find(|next| {
+                next.battlefield
+                    .iter()
+                    .any(|perm| perm.kind_enum() == FastPermKind::Led)
+            })
+            .unwrap();
+
+        let mut crack_led = Vec::new();
+        generate_fast_breach_escape_actions(
+            &mut context,
+            &mut crack_led,
+            &led_in_play,
+            &FastSearchConfig::default(),
+        );
+        let blue_mana = crack_led
+            .into_iter()
+            .map(|action| action.next_state)
+            .find(|next| {
+                !next
+                    .battlefield
+                    .iter()
+                    .any(|perm| perm.kind_enum() == FastPermKind::Led)
+                    && next.mana()[2] >= 3
+            })
+            .unwrap();
+
+        let mut escape_freeze = Vec::new();
+        generate_fast_breach_escape_actions(
+            &mut context,
+            &mut escape_freeze,
+            &blue_mana,
+            &FastSearchConfig::default(),
+        );
+        assert!(escape_freeze
+            .iter()
+            .any(|action| breach_combo_live_fast(&context, &action.next_state)));
+    }
+
+    #[test]
+    fn full_solver_finds_turn_one_breach_led_brain_freeze_win() {
+        let request = SolveKeepRequest {
+            hand: [
+                "Command Tower",
+                "Lotus Petal",
+                "Underworld Breach",
+                "Lion's Eye Diamond",
+                "Brain Freeze",
+                "Blank A",
+                "Blank B",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            library: ["Mill A", "Mill B", "Mill C", "Mill D"]
+                .into_iter()
+                .cycle()
+                .take(40)
+                .map(str::to_string)
+                .collect(),
+            gemstone_live: false,
+            state_limit: 100_000,
+            max_turns: 1,
+            goal: "engine".to_string(),
+            engine_target_count: 1,
+            engine_success_policy: "resilient".to_string(),
+            remora_upkeep_payments: 2,
+            action_sort: true,
+            gamble_mode: None,
+            gamble_seed: None,
+            simplified_gamble: true,
+            commander: Some("Nick Fury, Agent of S.H.I.E.L.D.".to_string()),
+        };
+        let result = solve_keep_fast(&request);
+        assert_eq!(result.turn, Some(1));
+        assert_eq!(result.label.as_deref(), Some("Underworld Breach combo"));
+    }
+
+    #[test]
+    fn kinnan_activation_hits_nonhuman_heartwood_from_top_five() {
+        let mut context = FastContext::with_card_names([
+            "Blank A",
+            "Blank B",
+            "Heartwood Storyteller",
+            "Kinnan, Bonder Prodigy",
+        ]);
+        let mut fixture = fixture_state(Vec::new());
+        fixture.library = [
+            "Blank A",
+            "Blank B",
+            "Heartwood Storyteller",
+            "Blank A",
+            "Blank B",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        let mut state = FastState::from_fixture(&mut context, &fixture);
+        let kinnan = creature_perm_fast(&mut context, "Kinnan, Bonder Prodigy").with_fresh(false);
+        state.push_perm(&context, kinnan);
+        state.set_mana([0, 0, 1, 0, 1, 5]);
+        let mut actions = Vec::new();
+        generate_fast_kinnan_activation_actions(&mut context, &mut actions, &state);
+        assert!(actions
+            .iter()
+            .any(|action| action.next_state.engine_count() > 0));
+    }
+
+    #[test]
+    fn jeska_exile_is_playable_but_not_discarded_and_expires_at_end_step() {
+        let mut context = FastContext::with_card_names(["Blank A", "Rhystic Study"]);
+        let mut state = FastState::from_fixture(&mut context, &fixture_state(Vec::new()));
+        let blank = context.card_id("Blank A").unwrap();
+        let rhystic = context.card_id("Rhystic Study").unwrap();
+        state.add_hand_card(blank);
+        state.add_jeska_exile_card(rhystic);
+        state.move_hand_to_graveyard(&context);
+        assert!(state.has_card(Some(rhystic)));
+        assert!(!state.has_card(Some(blank)));
+        assert!(state.graveyard.binary_search(&blank).is_ok());
+
+        let ended = end_turn_fast(&mut context, &state);
+        assert!(!ended.has_card(Some(rhystic)));
+        assert!(ended.jeska_exile.is_empty());
     }
 
     #[test]
@@ -10701,6 +13793,55 @@ mod tests {
                     })
                     .collect::<Vec<_>>()
             );
+        }
+    }
+
+    #[test]
+    fn top_tutors_expose_opening_relevant_mana_and_creature_intermediates() {
+        let names = [
+            "Vampiric Tutor",
+            "Mystical Tutor",
+            "Enlightened Tutor",
+            "Worldly Tutor",
+            "Birds of Paradise",
+            "Jeweled Amulet",
+            "Flooded Strand",
+            "Chord of Calling",
+            "Finale of Devastation",
+            "Nature's Rhythm",
+            "Ragavan, Nimble Pilferer",
+            "Rhystic Study",
+        ];
+        let mut context = FastContext::with_card_names(names);
+        let mut fixture = fixture_state(Vec::new());
+        fixture.library = names.iter().map(|name| (*name).to_string()).collect();
+        let state = FastState::from_fixture(&mut context, &fixture);
+
+        let vampiric = tutor_targets_fast(&context, "Vampiric Tutor", &state);
+        for name in ["Birds of Paradise", "Jeweled Amulet", "Flooded Strand"] {
+            let card = context.card_id(name).expect("test target is interned");
+            assert!(vampiric.contains(&card), "Vampiric Tutor omitted {name}");
+        }
+
+        let enlightened = tutor_targets_fast(&context, "Enlightened Tutor", &state);
+        assert!(enlightened.contains(
+            &context
+                .card_id("Jeweled Amulet")
+                .expect("Amulet is interned")
+        ));
+
+        let worldly = tutor_targets_fast(&context, "Worldly Tutor", &state);
+        for name in ["Birds of Paradise", "Ragavan, Nimble Pilferer"] {
+            assert!(worldly.contains(&context.card_id(name).expect("creature is interned")));
+        }
+
+        let mystical = tutor_targets_fast(&context, "Mystical Tutor", &state);
+        for name in [
+            "Chord of Calling",
+            "Finale of Devastation",
+            "Nature's Rhythm",
+        ] {
+            assert!(mystical.contains(&context.card_id(name).expect("spell is interned")));
         }
     }
 
@@ -11029,6 +14170,66 @@ mod tests {
         });
         sort_fast_battlefield(&context, &mut actual);
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn policy_games_are_invariant_to_internal_shard_boundaries() {
+        let request = PolicyEvalFastRequest {
+            deck: vec![
+                "Command Tower".to_string(),
+                "Ancient Tomb".to_string(),
+                "Lotus Petal".to_string(),
+                "Mana Vault".to_string(),
+                "Rhystic Study".to_string(),
+                "Heartwood Storyteller".to_string(),
+                "Blank".to_string(),
+            ],
+            commander: Some("Nick Fury, Agent of S.H.I.E.L.D.".to_string()),
+            thresholds_dead: vec![0.0; COMMANDER_MULLIGAN_BOTTOMS_FAST.len()],
+            thresholds_live: vec![0.0; COMMANDER_MULLIGAN_BOTTOMS_FAST.len()],
+            games: 12,
+            seed: 71,
+            game_offset: 0,
+            gemstone_caverns_live_rate: 0.75,
+            state_limit: 5_000,
+            actual_rerun_state_limit: 10_000,
+            samples_per_bottom: 2,
+            validation_samples: 2,
+            cap_weight: 0.0,
+            max_turns: 2,
+            goal: "engine".to_string(),
+            engine_target_count: 1,
+            engine_success_policy: "resilient".to_string(),
+            remora_upkeep_payments: 0,
+            action_sort: true,
+            adaptive_threshold_sampling: false,
+            include_game_records: true,
+            include_cap_replay_records: false,
+            include_validation_records: false,
+            trace_lines: false,
+            gamble_mode: Some("stochastic".to_string()),
+            simplified_gamble: true,
+            internal_shards: 1,
+            internal_shard_workers: 1,
+            weighted_policy_ev: true,
+            rhystic_t1_weight: 1.0,
+            rhystic_t2_weight: 0.75,
+            heartwood_t1_weight: 0.70,
+            heartwood_t2_weight: 0.55,
+        };
+        let sequential = evaluate_policy_fast(&request);
+        let mut sharded_request = request.clone();
+        sharded_request.internal_shards = 4;
+        sharded_request.internal_shard_workers = 4;
+        let sharded = evaluate_policy_fast(&sharded_request);
+
+        assert_eq!(sharded.successes, sequential.successes);
+        assert_eq!(sharded.cap_misses, sequential.cap_misses);
+        assert_eq!(sharded.turn_counts, sequential.turn_counts);
+        assert_eq!(
+            serde_json::to_value(sharded.game_records).unwrap(),
+            serde_json::to_value(sequential.game_records).unwrap()
+        );
     }
 
     #[test]

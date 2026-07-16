@@ -343,6 +343,8 @@ pub struct SolveKeepRequest {
     pub gamble_seed: Option<u64>,
     #[serde(default)]
     pub simplified_gamble: bool,
+    #[serde(default)]
+    pub commander: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -363,6 +365,8 @@ pub struct EarliestRequest {
     pub gamble_seed: Option<u64>,
     #[serde(default)]
     pub simplified_gamble: bool,
+    #[serde(default)]
+    pub commander: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -383,6 +387,8 @@ pub struct VisibleHandTaskRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct VisibleHandBatchRequest {
     pub deck: Vec<String>,
+    #[serde(default)]
+    pub commander: Option<String>,
     pub tasks: Vec<VisibleHandTaskRequest>,
     pub state_limit: usize,
     pub samples_per_bottom: usize,
@@ -413,10 +419,14 @@ pub struct VisibleHandBatchRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolicyEvalFastRequest {
     pub deck: Vec<String>,
+    #[serde(default)]
+    pub commander: Option<String>,
     pub thresholds_dead: Vec<f64>,
     pub thresholds_live: Vec<f64>,
     pub games: usize,
     pub seed: u64,
+    #[serde(default)]
+    pub game_offset: usize,
     pub gemstone_caverns_live_rate: f64,
     pub state_limit: usize,
     #[serde(default)]
@@ -463,6 +473,8 @@ pub struct PolicyEvalFastRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolicySimFastRequest {
     pub deck: Vec<String>,
+    #[serde(default)]
+    pub commander: Option<String>,
     pub threshold_hands: usize,
     pub eval_games: usize,
     pub seed: u64,
@@ -4089,6 +4101,7 @@ mod tests {
             gamble_mode: Some("stochastic".to_string()),
             gamble_seed: Some(1),
             simplified_gamble: true,
+            commander: None,
         }
     }
 
@@ -4371,6 +4384,7 @@ mod tests {
             gamble_mode: Some("off".to_string()),
             gamble_seed: Some(18_406_728_991_951_391_320),
             simplified_gamble: false,
+            commander: None,
         };
         let response = fast_engine::solve_keep_fast(&request);
         std::env::remove_var("RHYSTIC_STRICT_SHUFFLE_HIDDEN");

@@ -14,7 +14,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 RUST_MANIFEST = ROOT / "rust/rhystic_core/Cargo.toml"
-RUST_BIN = ROOT / "rust/rhystic_core/target/release/rhystic-core-smoke"
+RUST_BIN = ROOT / "target/release/rhystic-core-smoke"
 MERGE_SCRIPT = ROOT / "scripts/rhystic_merge_raw_delta_stream.py"
 DEFAULT_REGISTRY = ROOT / "data/rhystic_study_turn12/experiment_loop/registry.json"
 EXPERIMENT_LOOP = ROOT / "scripts/rhystic_experiment_loop.py"

@@ -1,0 +1,7 @@
+eldritch_to_dispel: Eldritch Evolution=Dispel
+rite_to_dispel: Rite of Flame=Dispel
+tundra_to_dispel: Tundra=Dispel
+volcanic_to_dispel: Volcanic Island=Dispel
+wishclaw_to_dispel: Wishclaw Talisman=Dispel
+rain_to_dispel: Rain of Filth=Dispel
+probe_to_dispel: Gitaxian Probe=Dispel

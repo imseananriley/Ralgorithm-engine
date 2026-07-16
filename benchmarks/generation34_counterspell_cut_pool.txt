@@ -1,0 +1,61 @@
+# Lands (Emergence Zone and Sink into Stupor are protected utility cards).
+Ancient Tomb
+Arid Mesa
+Bloodstained Mire
+City of Brass
+City of Traitors
+Command Tower
+Crystal Vein
+Exotic Orchard
+Flooded Strand
+Forbidden Orchard
+Gemstone Caverns
+Gemstone Mine
+Glimmervoid
+Mana Confluence
+Misty Rainforest
+Polluted Delta
+Scalding Tarn
+Scrubland
+Starting Town
+Taiga
+Tarnished Citadel
+Tropical Island
+Tundra
+Underground Sea
+Verdant Catacombs
+Volcanic Island
+Windswept Heath
+
+# Acceleration and mana conversion.
+Birds of Paradise
+Chrome Mox
+Culling the Weak
+Dark Ritual
+Deathrite Shaman
+Elvish Spirit Guide
+Lion's Eye Diamond
+Lotus Petal
+Mana Vault
+Manamorphose
+Mox Amber
+Mox Diamond
+Rain of Filth
+Rite of Flame
+Simian Spirit Guide
+Sol Ring
+Tinder Wall
+
+# Tutors.
+Crop Rotation
+Demonic Tutor
+Eldritch Evolution
+Enlightened Tutor
+Gamble
+Green Sun's Zenith
+Imperial Seal
+Mystical Tutor
+Scheming Symmetry
+Summoner's Pact
+Vampiric Tutor
+Wishclaw Talisman

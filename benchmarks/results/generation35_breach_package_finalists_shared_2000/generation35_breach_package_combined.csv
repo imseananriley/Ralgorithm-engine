@@ -1,0 +1,6 @@
+variant,cut,add,games,successes,success_rate,t1_successes,t2_successes,rate_delta,rate_ci_low,rate_ci_high,weighted_score,score_delta,score_bootstrap_ci_low,score_bootstrap_ci_high,rhystic_wins,heartwood_wins,breach_combo_wins,cap_misses
+baseline,,,2000,1459,0.7295,124,1335,0.0000,,,0.507875,0.000000,,,936,523,0,6
+culling_to_breach,Culling the Weak,Underworld Breach,2000,1434,0.7170,124,1310,-0.0125,-0.01961509,-0.00538491,0.499450,-0.008425,-0.013375,-0.003525,919,515,0,6
+rain_probe_to_breach_freeze,Rain of Filth + Gitaxian Probe,Underworld Breach + Brain Freeze,2000,1434,0.7170,123,1311,-0.0125,-0.02252938,-0.00247062,0.496125,-0.011750,-0.019125,-0.004175,884,545,5,4
+culling_probe_to_breach_freeze,Culling the Weak + Gitaxian Probe,Underworld Breach + Brain Freeze,2000,1421,0.7105,115,1306,-0.0190,-0.02896163,-0.00903837,0.493050,-0.014825,-0.021900,-0.007950,893,519,9,5
+culling_rain_to_breach_freeze,Culling the Weak + Rain of Filth,Underworld Breach + Brain Freeze,2000,1403,0.7015,126,1277,-0.0280,-0.03839374,-0.01760626,0.488375,-0.019500,-0.026900,-0.012200,884,512,7,7

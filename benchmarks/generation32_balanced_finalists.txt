@@ -1,0 +1,3 @@
+original_unbalanced:Scrubland=Birds of Paradise;Diabolic Intent=Flooded Strand
+balanced_flooded_blue:Marsh Flats=Flooded Strand;Badlands=Tropical Island;Bayou=Volcanic Island;Diabolic Intent=Birds of Paradise
+balanced_wooded_bant:Bloodstained Mire=Wooded Foothills;Scrubland=Savannah;Underground Sea=Tropical Island;Diabolic Intent=Birds of Paradise

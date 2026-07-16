@@ -3,6 +3,8 @@ name = "rhystic_core"
 version = "0.1.0"
 edition = "2021"
 description = "Hot-core primitives for the Ralgorithm Rhystic/Heartwood simulator."
+repository = "https://github.com/imseananriley/Ralgorithm-engine"
+publish = false
 
 [lib]
 name = "rhystic_core"

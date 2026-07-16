@@ -1,0 +1,12 @@
+culling_rain_to_breach_freeze: Culling the Weak=Underworld Breach; Rain of Filth=Brain Freeze
+culling_probe_to_breach_freeze: Culling the Weak=Underworld Breach; Gitaxian Probe=Brain Freeze
+culling_birds_to_breach_freeze: Culling the Weak=Underworld Breach; Birds of Paradise=Brain Freeze
+culling_tundra_to_breach_freeze: Culling the Weak=Underworld Breach; Tundra=Brain Freeze
+culling_wishclaw_to_breach_freeze: Culling the Weak=Underworld Breach; Wishclaw Talisman=Brain Freeze
+culling_eldritch_to_breach_freeze: Culling the Weak=Underworld Breach; Eldritch Evolution=Brain Freeze
+culling_manamorphose_to_breach_freeze: Culling the Weak=Underworld Breach; Manamorphose=Brain Freeze
+culling_rite_to_breach_freeze: Culling the Weak=Underworld Breach; Rite of Flame=Brain Freeze
+rain_birds_to_breach_freeze: Rain of Filth=Underworld Breach; Birds of Paradise=Brain Freeze
+rain_probe_to_breach_freeze: Rain of Filth=Underworld Breach; Gitaxian Probe=Brain Freeze
+culling_to_breach: Culling the Weak=Underworld Breach
+culling_to_brain_freeze: Culling the Weak=Brain Freeze

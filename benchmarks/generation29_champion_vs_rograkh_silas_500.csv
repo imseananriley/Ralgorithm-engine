@@ -1,0 +1,4 @@
+model,deck,games,successes,success_rate,cap_misses,cap_upper_rate,rhystic_t1,rhystic_t2,heartwood_t1,heartwood_t2,weighted_score
+strict,Champion,500,303,0.606,3,0.612,20,170,8,105,0.4217
+strict,Rograkh Silas,500,293,0.586,11,0.608,30,263,0,0,0.4545
+draw_engine_proxy,Rograkh Silas,500,299,0.598,14,0.626,30,269,0,0,0.4635

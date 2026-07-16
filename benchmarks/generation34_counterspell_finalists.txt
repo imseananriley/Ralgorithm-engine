@@ -1,0 +1,3 @@
+rain_to_dispel: Rain of Filth=Dispel
+probe_to_dispel: Gitaxian Probe=Dispel
+tundra_to_dispel: Tundra=Dispel

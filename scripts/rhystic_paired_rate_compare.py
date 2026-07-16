@@ -23,10 +23,12 @@ from rhystic_quick_compare import (
     read_moxfield,
     write_variant_deck,
 )
+from source_digest import engine_source_digest
 
 
 LABEL_ENGINE = {
     "Rhystic Study": "rhystic",
+    "Underworld Breach combo": "rhystic",
     "Heartwood Storyteller": "heartwood",
     "Mystic Remora": "remora",
     "Smothering Tithe": "tithe",
@@ -158,6 +160,12 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     tmp_path.replace(path)
 
 
+def stamp_result_source(path: Path, source_digest: str) -> None:
+    payload = load_payload(path)
+    payload["engine_source_digest"] = source_digest
+    write_json_atomic(path, payload)
+
+
 def value_matches(actual: Any, expected: Any) -> bool:
     if isinstance(expected, float):
         try:
@@ -174,6 +182,7 @@ def result_payload_mismatches(
     require_game_records: bool,
 ) -> list[str]:
     checks: dict[str, Any] = {
+        "engine_source_digest": args.engine_source_digest,
         "target": args.target,
         "threshold_hands_per_stage": args.threshold_hands,
         "eval_games": args.eval_games,
@@ -271,6 +280,7 @@ def deck_digest(path: Path) -> str:
 
 def baseline_cache_key(args: argparse.Namespace, deck_json: Path) -> str:
     payload = {
+        "engine_source_digest": args.engine_source_digest,
         "deck_digest": deck_digest(deck_json),
         "target": args.target,
         "threshold_hands": args.threshold_hands,
@@ -642,9 +652,14 @@ def serializable_config(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--deck-json", default="data/moxfield_ggafAahWI3KipH2u48GdVQ.json")
-    parser.add_argument("--out-dir", default="data/rhystic_study_turn12/paired_rate_compare")
+    parser = argparse.ArgumentParser(
+        description="Run paired card-swap comparisons with common random numbers."
+    )
+    parser.add_argument(
+        "--deck-json",
+        default="fixtures/decks/nick_fury_generation32_balanced_optimized.json",
+    )
+    parser.add_argument("--out-dir", default="benchmarks/results/paired_rate_compare")
     parser.add_argument("--target", default="rhystic_heartwood", choices=("rhystic", "heartwood", "rhystic_heartwood"))
     parser.add_argument("--swap", action="append", type=parse_swap, default=[])
     parser.add_argument("--swap-file", action="append", default=[])
@@ -659,7 +674,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--state-limit", type=int, default=20_000)
     parser.add_argument("--actual-rerun-state-limit", type=int, default=60_000)
-    parser.add_argument("--workers", type=int, default=6)
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=max(1, min(8, (os.cpu_count() or 2) - 1)),
+    )
     parser.add_argument("--chunks-per-worker", type=int, default=None)
     parser.add_argument("--seed", type=int, default=2026062905)
     parser.add_argument("--threshold-cache-dir", default=None)
@@ -681,10 +700,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bootstrap-samples", type=int, default=0)
     parser.add_argument("--rate-half-width", type=float, default=0.0025)
     parser.add_argument("--score-half-width", type=float, default=0.25)
-    parser.add_argument("--rhystic-t1-weight", type=float, default=100.0)
-    parser.add_argument("--rhystic-t2-weight", type=float, default=60.0)
-    parser.add_argument("--heartwood-t1-weight", type=float, default=20.0)
-    parser.add_argument("--heartwood-t2-weight", type=float, default=10.0)
+    parser.add_argument("--rhystic-t1-weight", type=float, default=1.0)
+    parser.add_argument("--rhystic-t2-weight", type=float, default=0.75)
+    parser.add_argument("--heartwood-t1-weight", type=float, default=0.70)
+    parser.add_argument("--heartwood-t2-weight", type=float, default=0.55)
     parser.add_argument("--force", action="store_true")
     parser.add_argument(
         "--baseline-result-json",
@@ -702,6 +721,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    args.engine_source_digest = engine_source_digest(ROOT)
     if (
         args.eval_games >= 100
         and not args.allow_single_sample_mulligan_policy
@@ -787,6 +807,7 @@ def main() -> int:
             print(f"running {variant.name}", flush=True)
             thresholds_json = baseline_thresholds_json if args.shared_thresholds and variant.name != "baseline" else None
             run_sim(args, variant_deck, result_json, thresholds_json=thresholds_json)
+            stamp_result_source(result_json, args.engine_source_digest)
         else:
             print(f"reusing {variant.name}", flush=True)
         if variant.name == "baseline":

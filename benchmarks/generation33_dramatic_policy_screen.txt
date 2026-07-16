@@ -1,0 +1,8 @@
+dramatic_over_rite:Rite of Flame=Dramatic Reversal
+dramatic_over_rain:Rain of Filth=Dramatic Reversal
+dramatic_over_culling:Culling the Weak=Dramatic Reversal
+dramatic_over_manamorphose:Manamorphose=Dramatic Reversal
+dramatic_over_simian:Simian Spirit Guide=Dramatic Reversal
+dramatic_over_elvish:Elvish Spirit Guide=Dramatic Reversal
+dramatic_over_tinder:Tinder Wall=Dramatic Reversal
+dramatic_over_mystical:Mystical Tutor=Dramatic Reversal

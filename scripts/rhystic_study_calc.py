@@ -827,6 +827,9 @@ def action_priority(goal: str, action: str) -> int:
 
 
 def default_rust_action_bin() -> Path:
+    workspace_bin = ROOT / "target" / "release" / "rhystic-core-smoke"
+    if workspace_bin.exists():
+        return workspace_bin
     return ROOT / "rust" / "rhystic_core" / "target" / "release" / "rhystic-core-smoke"
 
 

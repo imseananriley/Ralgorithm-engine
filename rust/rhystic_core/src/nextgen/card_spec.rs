@@ -74,6 +74,9 @@ impl ActionTemplateMask {
     pub const GAMBLE: Self = Self(1 << 23);
     pub const GITAXIAN_PROBE: Self = Self(1 << 24);
     pub const STREET_WRAITH: Self = Self(1 << 25);
+    pub const TURBO_OPENING: Self = Self(1 << 26);
+    pub const CREATURE_MANA_ENGINE: Self = Self(1 << 27);
+    pub const CREATURE_BATTLEFIELD_TUTOR: Self = Self(1 << 28);
 
     pub const fn contains(self, template: Self) -> bool {
         (self.0 & template.0) != 0
@@ -329,6 +332,15 @@ fn opening_mana_profile(name: &str) -> OpeningManaProfile {
             SWAMP | MOUNTAIN,
             0,
         ),
+        "Breeding Pool" => (U | G, 0, false, OpeningLandKind::Simple, ISLAND | FOREST, 0),
+        "Blood Crypt" => (
+            B | R,
+            0,
+            false,
+            OpeningLandKind::Simple,
+            SWAMP | MOUNTAIN,
+            0,
+        ),
         "Bayou" => (B | G, 0, false, OpeningLandKind::Simple, SWAMP | FOREST, 0),
         "Hallowed Fountain" | "Tundra" => {
             (U | W, 0, false, OpeningLandKind::Simple, PLAINS | ISLAND, 0)
@@ -344,6 +356,7 @@ fn opening_mana_profile(name: &str) -> OpeningManaProfile {
             0,
         ),
         "Underground Sea" => (B | U, 0, false, OpeningLandKind::Simple, ISLAND | SWAMP, 0),
+        "Watery Grave" => (B | U, 0, false, OpeningLandKind::Simple, ISLAND | SWAMP, 0),
         "Volcanic Island" => (
             R | U,
             0,
@@ -353,6 +366,9 @@ fn opening_mana_profile(name: &str) -> OpeningManaProfile {
             0,
         ),
         "Emergence Zone" => (0, 1, false, OpeningLandKind::Simple, 0, 0),
+        "Forest" | "Dryad Arbor" => (G, 0, false, OpeningLandKind::Simple, FOREST, 0),
+        "Gaea's Cradle" => (G, 0, false, OpeningLandKind::Simple, 0, 0),
+        "Shifting Woodland" => (G, 0, true, OpeningLandKind::Simple, 0, 0),
         "Gemstone Caverns" => (0, 1, false, OpeningLandKind::GemstoneCaverns, 0, 0),
         "City of Traitors" => (0, 2, false, OpeningLandKind::CityOfTraitors, 0, 0),
         "Crystal Vein" => (0, 1, false, OpeningLandKind::CrystalVein, 0, 0),
@@ -369,6 +385,7 @@ fn opening_mana_profile(name: &str) -> OpeningManaProfile {
         "Verdant Catacombs" => (0, 0, false, OpeningLandKind::Fetch, 0, SWAMP | FOREST),
         "Windswept Heath" => (0, 0, false, OpeningLandKind::Fetch, 0, PLAINS | FOREST),
         "Wooded Foothills" => (0, 0, false, OpeningLandKind::Fetch, 0, MOUNTAIN | FOREST),
+        "Hydroelectric Specimen" => (U, 0, false, OpeningLandKind::Simple, 0, 0),
         "City of Brass" | "Command Tower" | "Exotic Orchard" | "Forbidden Orchard"
         | "Mana Confluence" | "Starting Town" | "Tarnished Citadel" => {
             (RAINBOW, 0, false, OpeningLandKind::Simple, 0, 0)
@@ -417,10 +434,15 @@ fn compile_flags(name: &str) -> CardFlags {
     if matches!(
         name,
         "Copy Enchantment"
+            | "Cryptolith Rite"
+            | "Curse of Opulence"
+            | "Earthcraft"
             | "Flash Photography"
             | "Mystic Remora"
             | "Rhystic Study"
             | "Smothering Tithe"
+            | "Shimmerwilds Growth"
+            | "Underworld Breach"
     ) {
         flags.insert(CardFlags::ENCHANTMENT);
     }
@@ -455,8 +477,19 @@ fn action_templates(name: &str, flags: CardFlags) -> ActionTemplateMask {
         }
         "Chrome Mox" => templates.insert(ActionTemplateMask::CHROME_MOX),
         "Mox Diamond" => templates.insert(ActionTemplateMask::MOX_DIAMOND),
-        "Sol Ring" | "Mana Vault" | "Arcane Signet" | "Relic of Legends" | "Wishclaw Talisman"
-        | "Springleaf Drum" => templates.insert(ActionTemplateMask::ARTIFACT_SPELL),
+        "Sol Ring"
+        | "Mana Vault"
+        | "Arcane Signet"
+        | "Relic of Legends"
+        | "Wishclaw Talisman"
+        | "Springleaf Drum"
+        | "Chromatic Star"
+        | "Defense Grid"
+        | "Grim Monolith"
+        | "Grinding Station"
+        | "Jeweled Amulet"
+        | "Talisman of Dominance"
+        | "Vexing Bauble" => templates.insert(ActionTemplateMask::ARTIFACT_SPELL),
         "Birds of Paradise"
         | "Deathrite Shaman"
         | "Esper Sentinel"
@@ -469,14 +502,24 @@ fn action_templates(name: &str, flags: CardFlags) -> ActionTemplateMask {
         | "The Cabbage Merchant"
         | "Tinder Wall"
         | "Valley Floodcaller"
-        | "Wild Cantor" => templates.insert(ActionTemplateMask::CREATURE),
+        | "Wild Cantor"
+        | "Birgi, God of Storytelling"
+        | "Badgermole Cub"
+        | "Gene Pollinator"
+        | "Kinnan, Bonder Prodigy"
+        | "Storm-Kiln Artist" => templates.insert(ActionTemplateMask::CREATURE),
+        "Hydroelectric Specimen" => templates.insert(ActionTemplateMask::CREATURE),
         "Simian Spirit Guide" | "Elvish Spirit Guide" => {
             templates.insert(ActionTemplateMask::SPIRIT_GUIDE)
         }
-        "Dark Ritual" | "Rite of Flame" => templates.insert(ActionTemplateMask::RITUAL),
+        "Dark Ritual" | "Rite of Flame" | "Cabal Ritual" => {
+            templates.insert(ActionTemplateMask::RITUAL)
+        }
         "Manamorphose" => templates.insert(ActionTemplateMask::MANAMORPHOSE),
         "Rain of Filth" => templates.insert(ActionTemplateMask::RAIN),
-        "Culling the Weak" => templates.insert(ActionTemplateMask::SACRIFICE_RITUAL),
+        "Culling the Weak" | "Infernal Plunge" => {
+            templates.insert(ActionTemplateMask::SACRIFICE_RITUAL)
+        }
         "An Offer You Can't Refuse" => templates.insert(ActionTemplateMask::OFFER),
         "Noxious Revival" => templates.insert(ActionTemplateMask::NOXIOUS),
         "Summoner's Pact" => templates.insert(ActionTemplateMask::SUMMONERS_PACT),
@@ -494,6 +537,26 @@ fn action_templates(name: &str, flags: CardFlags) -> ActionTemplateMask {
         "Gamble" => templates.insert(ActionTemplateMask::GAMBLE),
         "Gitaxian Probe" => templates.insert(ActionTemplateMask::GITAXIAN_PROBE),
         "Street Wraith" => templates.insert(ActionTemplateMask::STREET_WRAITH),
+        "Ad Nauseam"
+        | "Brain Freeze"
+        | "Borne Upon a Wind"
+        | "Demonic Consultation"
+        | "Tainted Pact"
+        | "Wheel of Fortune"
+        | "Windfall"
+        | "Dramatic Reversal"
+        | "Curse of Opulence"
+        | "Flare of Duplication"
+        | "Flashback"
+        | "Jeska's Will"
+        | "Necropotence" => templates.insert(ActionTemplateMask::TURBO_OPENING),
+        "Underworld Breach" => templates.insert(ActionTemplateMask::TURBO_OPENING),
+        "Cryptolith Rite" | "Earthcraft" | "Shimmerwilds Growth" | "Mockingbird" => {
+            templates.insert(ActionTemplateMask::CREATURE_MANA_ENGINE)
+        }
+        "Chord of Calling" | "Finale of Devastation" | "Nature's Rhythm" => {
+            templates.insert(ActionTemplateMask::CREATURE_BATTLEFIELD_TUTOR)
+        }
         _ => {}
     }
     templates
@@ -503,7 +566,12 @@ fn payment_gate_costs(name: &str) -> [Option<Cost>; 2] {
     let (first, second) = match name {
         "Rhystic Study" => ([2, 0, 0, 1, 0, 0], None),
         "Heartwood Storyteller" => ([1, 0, 0, 0, 0, 2], None),
-        "Sol Ring" | "Mana Vault" | "Springleaf Drum" => ([1, 0, 0, 0, 0, 0], None),
+        "Brain Freeze" => ([1, 0, 0, 1, 0, 0], None),
+        "Sol Ring" | "Mana Vault" | "Springleaf Drum" | "Chromatic Star" | "Jeweled Amulet"
+        | "Vexing Bauble" => ([1, 0, 0, 0, 0, 0], None),
+        "Defense Grid" | "Grim Monolith" | "Grinding Station" | "Talisman of Dominance" => {
+            ([2, 0, 0, 0, 0, 0], None)
+        }
         "Arcane Signet" => ([2, 0, 0, 0, 0, 0], None),
         "Relic of Legends" => ([3, 0, 0, 0, 0, 0], None),
         "Wishclaw Talisman" => ([1, 1, 0, 0, 0, 0], None),
@@ -520,6 +588,7 @@ fn payment_gate_costs(name: &str) -> [Option<Cost>; 2] {
         "Valley Floodcaller" => ([2, 0, 0, 1, 0, 0], None),
         "Wild Cantor" => ([0, 0, 1, 0, 0, 0], Some([0, 0, 0, 0, 0, 1])),
         "Dark Ritual" => ([0, 1, 0, 0, 0, 0], None),
+        "Cabal Ritual" => ([1, 1, 0, 0, 0, 0], None),
         "Rite of Flame" | "Gamble" => ([0, 0, 1, 0, 0, 0], None),
         "Manamorphose" => ([1, 0, 1, 0, 0, 0], Some([1, 0, 0, 0, 0, 1])),
         "Rain of Filth" | "Culling the Weak" => ([0, 1, 0, 0, 0, 0], None),
@@ -539,6 +608,15 @@ fn payment_gate_costs(name: &str) -> [Option<Cost>; 2] {
         "Imperial Seal" | "Scheming Symmetry" | "Vampiric Tutor" => ([0, 1, 0, 0, 0, 0], None),
         "Mystical Tutor" => ([0, 0, 0, 1, 0, 0], None),
         "Worldly Tutor" => ([0, 0, 0, 0, 0, 1], None),
+        "Birgi, God of Storytelling" => ([2, 0, 1, 0, 0, 0], None),
+        "Badgermole Cub" | "Kinnan, Bonder Prodigy" => ([1, 0, 0, 0, 0, 1], None),
+        "Gene Pollinator" => ([0, 0, 0, 0, 0, 1], None),
+        "Storm-Kiln Artist" => ([3, 0, 1, 0, 0, 0], None),
+        "Hydroelectric Specimen" => ([2, 0, 0, 1, 0, 0], None),
+        "Cryptolith Rite" | "Earthcraft" | "Shimmerwilds Growth" => ([1, 0, 0, 0, 0, 1], None),
+        "Mockingbird" => ([0, 0, 0, 1, 0, 0], Some([2, 0, 0, 1, 0, 0])),
+        "Chord of Calling" => ([0, 0, 0, 0, 0, 3], None),
+        "Finale of Devastation" | "Nature's Rhythm" => ([0, 0, 0, 0, 0, 2], None),
         _ => return [None, None],
     };
     [Some(first), second]
@@ -644,18 +722,28 @@ fn is_creature(name: &str) -> bool {
     matches!(
         name,
         "Birds of Paradise"
+            | "Birgi, God of Storytelling"
+            | "Badgermole Cub"
+            | "Clever Impersonator"
             | "Deathrite Shaman"
+            | "Dryad Arbor"
             | "Elvish Spirit Guide"
             | "Esper Sentinel"
             | "Faerie Mastermind"
             | "Heartwood Storyteller"
+            | "Hydroelectric Specimen"
+            | "Gene Pollinator"
+            | "Kinnan, Bonder Prodigy"
             | "Lotho, Corrupt Shirriff"
+            | "Mockingbird"
             | "Nick Fury, Agent of S.H.I.E.L.D."
             | "Orcish Bowmasters"
             | "Ragavan, Nimble Pilferer"
             | "Ranger-Captain of Eos"
             | "Simian Spirit Guide"
             | "Street Wraith"
+            | "Storm-Kiln Artist"
+            | "Subtlety"
             | "The Cabbage Merchant"
             | "Tinder Wall"
             | "Valley Floodcaller"
@@ -666,6 +754,11 @@ fn is_mana_card(name: &str) -> bool {
     matches!(
         name,
         "An Offer You Can't Refuse"
+            | "Arcane Signet"
+            | "Birgi, God of Storytelling"
+            | "Badgermole Cub"
+            | "Cabal Ritual"
+            | "Chromatic Star"
             | "Birds of Paradise"
             | "Chrome Mox"
             | "Culling the Weak"
@@ -675,6 +768,9 @@ fn is_mana_card(name: &str) -> bool {
             | "Infernal Plunge"
             | "Lion's Eye Diamond"
             | "Lotus Petal"
+            | "Grim Monolith"
+            | "Gene Pollinator"
+            | "Jeweled Amulet"
             | "Mana Vault"
             | "Manamorphose"
             | "Mox Amber"
@@ -684,6 +780,9 @@ fn is_mana_card(name: &str) -> bool {
             | "Rite of Flame"
             | "Simian Spirit Guide"
             | "Sol Ring"
+            | "Springleaf Drum"
+            | "Talisman of Dominance"
+            | "Kinnan, Bonder Prodigy"
             | "Strike It Rich"
             | "Tinder Wall"
     )
@@ -693,7 +792,10 @@ fn is_tutor(name: &str) -> bool {
     matches!(
         name,
         "Beseech the Mirror"
+            | "Chord of Calling"
             | "Crop Rotation"
+            | "Demonic Consultation"
+            | "Demonic Counsel"
             | "Demonic Tutor"
             | "Diabolic Intent"
             | "Eldritch Evolution"
@@ -702,9 +804,12 @@ fn is_tutor(name: &str) -> bool {
             | "Green Sun's Zenith"
             | "Imperial Seal"
             | "Mystical Tutor"
+            | "Nature's Rhythm"
+            | "Finale of Devastation"
             | "Ranger-Captain of Eos"
             | "Scheming Symmetry"
             | "Summoner's Pact"
+            | "Tainted Pact"
             | "Vampiric Tutor"
             | "Wishclaw Talisman"
     )

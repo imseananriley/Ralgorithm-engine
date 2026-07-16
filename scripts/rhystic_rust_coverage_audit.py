@@ -22,6 +22,7 @@ LANDS = {
     "Bayou": ("modeled", "land", "typed BG land"),
     "Bloodstained Mire": ("modeled", "fetch_land", "fetches supported typed dual/shock targets"),
     "Blood Crypt": ("modeled", "land", "typed BR shock"),
+    "Breeding Pool": ("modeled", "land", "typed UG shock"),
     "Boseiju, Who Endures": ("modeled", "land", "green land; channel text not modeled"),
     "City of Brass": ("modeled", "land", "five-color land"),
     "City of Traitors": ("modeled", "land", "two-colorless land with sacrifice-on-next-land"),
@@ -30,12 +31,14 @@ LANDS = {
     "Emergence Zone": ("partial", "land", "colorless land modeled; flash activation intentionally not modeled for this objective"),
     "Exotic Orchard": ("modeled", "land", "approximated as five-color land"),
     "Flooded Strand": ("modeled", "fetch_land", "fetches supported typed dual/shock targets"),
+    "Forest": ("modeled", "land", "basic Forest"),
     "Forbidden Orchard": ("modeled", "land", "five-color land"),
     "Gemstone Caverns": ("modeled", "pregame_land", "pre-sampled live at configured rate"),
     "Gemstone Mine": ("modeled", "land", "three counters"),
     "Glimmervoid": ("modeled", "land", "unconditional five-color tap; sacrifices at end step if no artifact is controlled"),
     "Glittering Caves of Aglarond": ("modeled", "pregame_land_alias", "Gemstone Caverns alias; pre-sampled live at configured rate, colorless without luck counter"),
     "Hallowed Fountain": ("modeled", "land", "typed UW shock"),
+    "Hydroelectric Specimen": ("modeled", "mdfc_land_creature", "blue land face and castable blue creature face"),
     "Mana Confluence": ("modeled", "land", "five-color land"),
     "Marsh Flats": ("modeled", "fetch_land", "fetches supported typed dual/shock targets"),
     "Misty Rainforest": ("modeled", "fetch_land", "fetches supported typed dual/shock targets"),
@@ -46,6 +49,7 @@ LANDS = {
     "Scalding Tarn": ("modeled", "fetch_land", "fetches supported typed dual/shock targets"),
     "Scrubland": ("modeled", "land", "typed BW dual"),
     "Sea of Clouds": ("modeled", "land", "UW land"),
+    "Shifting Woodland": ("modeled", "land", "enters tapped and taps for green; delirium copy text is outside this objective"),
     "Sink into Stupor": ("modeled", "mdfc_land", "modeled as untapped blue MDFC land for this objective"),
     "Starting Town": ("modeled", "land", "five-color land"),
     "Steam Vents": ("modeled", "land", "typed RU shock"),
@@ -56,41 +60,67 @@ LANDS = {
     "Underground Sea": ("modeled", "land", "typed UB dual"),
     "Verdant Catacombs": ("modeled", "fetch_land", "fetches supported typed dual/shock targets"),
     "Volcanic Island": ("modeled", "land", "typed UR dual"),
+    "Watery Grave": ("modeled", "land", "typed UB shock"),
     "Windswept Heath": ("modeled", "fetch_land", "fetches supported typed dual/shock targets"),
     "Wooded Foothills": ("modeled", "fetch_land", "fetches supported typed dual/shock targets"),
 }
 
 ACTION_CARDS = {
+    "Ad Nauseam": ("partial", "draw", "turbo context uses a documented conservative fifteen-card draw proxy"),
     "An Offer You Can't Refuse": ("modeled", "self_counter", "can counter supported own spells for two Treasures"),
     "Angel's Grace": ("modeled", "pact_survival", "modeled for Pact upkeep survival checks"),
     "Arcane Signet": ("modeled", "mana_artifact", "casts for 2, taps for any color"),
     "Beseech the Mirror": ("modeled", "tutor", "normal, bargained, and LED-priority tutor lines"),
+    "Badgermole Cub": ("modeled", "mana_creature", "earthbends a land on entry and applies the supported land-creature mana bonuses"),
+    "Brain Freeze": ("modeled", "storm_mill", "counts prior spells and mills the actual ordered library"),
     "Birds of Paradise": ("modeled", "mana_creature", "casts for G, taps next turn for any color"),
+    "Birgi, God of Storytelling": ("modeled", "mana_creature", "casts for 2R and adds R after later spells cast that turn"),
     "Chrome Mox": ("modeled", "mana_artifact", "imprints colored nonartifact nonland cards"),
     "Crop Rotation": ("modeled", "land_tutor", "sacrifices land and finds supported mana lands"),
     "Culling the Weak": ("modeled", "ritual", "sacrifices creature for BBBB"),
+    "Cabal Ritual": ("modeled", "ritual", "1B to BBB, or BBBBB with threshold"),
+    "Chromatic Star": ("modeled", "mana_artifact", "casts for 1; pays 1, sacrifices, filters one mana, and draws"),
+    "Chord of Calling": ("modeled", "creature_tutor", "uses colored/generic convoke and puts supported creatures onto the battlefield"),
+    "Cryptolith Rite": ("modeled", "mana_enchantment", "non-summoning-sick creatures tap for any color"),
+    "Curse of Opulence": ("modeled", "combat_mana", "Rograkh or Ragavan combat creates the opening-relevant Treasure"),
     "Dark Ritual": ("modeled", "ritual", "B to BBB"),
     "Deathrite Shaman": ("modeled", "mana_creature", "casts for B/G, taps next turn using land-grave count"),
     "Demonic Tutor": ("modeled", "tutor", "finds Rhystic/Heartwood and relevant intermediate targets through Mystical"),
+    "Demonic Consultation": ("partial", "tutor", "finds Rhystic from the actual singleton library when it survives the first six exiles"),
+    "Defense Grid": ("partial", "artifact_body", "castable artifact body; opponent tax text is outside the proactive objective"),
     "Diabolic Intent": ("modeled", "tutor", "sacrifices creature and finds engine"),
     "Eldritch Evolution": ("modeled", "creature_tutor", "sacrifices creature into Heartwood"),
     "Elvish Spirit Guide": ("modeled", "free_mana", "exiles for G"),
+    "Dramatic Reversal": ("modeled", "untap", "untaps nonland permanents without removing summoning sickness"),
+    "Dryad Arbor": ("modeled", "land_creature", "green Forest creature with summoning sickness and creature-tutor interactions"),
+    "Earthcraft": ("modeled", "mana_enchantment", "taps creatures to untap a tapped basic Forest"),
     "Enlightened Tutor": ("modeled", "top_tutor", "top-tutors Rhystic in rhystic_heartwood mode"),
     "Esper Sentinel": ("modeled", "artifact_creature", "castable W artifact-creature body; draw trigger not modeled"),
     "Faerie Mastermind": ("partial", "creature_body", "castable MV2 blue creature body; draw text not modeled"),
+    "Finale of Devastation": ("modeled", "creature_tutor", "finds supported creatures from library or graveyard for XGG"),
+    "Flare of Duplication": ("partial", "ritual_copy", "free mode copies supported ritual spells by sacrificing a red creature"),
+    "Flashback": ("partial", "graveyard_recursion", "supported mode recasts Dark Ritual, Rite of Flame, or Cabal Ritual"),
     "Gamble": ("modeled", "tutor", "simplified stochastic discard mode"),
     "Green Sun's Zenith": ("modeled", "creature_tutor", "finds Heartwood or supported green mana creatures"),
     "Gitaxian Probe": ("modeled", "draw", "casts for two life and draws the next card"),
     "Grim Tutor": ("modeled", "tutor", "finds engine to hand"),
+    "Gaea's Cradle": ("modeled", "mana_land", "taps for green equal to controlled creature count"),
+    "Gene Pollinator": ("modeled", "mana_creature", "casts for G and taps itself plus another permanent for any color"),
+    "Grim Monolith": ("modeled", "mana_artifact", "casts for 2 and taps for CCC; untap cost is irrelevant by turn two"),
+    "Grinding Station": ("partial", "artifact_body", "castable artifact body; mill-combo activation is not modeled for this objective"),
     "Heartwood Storyteller": ("modeled", "engine", "native objective engine"),
     "Idyllic Tutor": ("modeled", "tutor", "finds Rhystic to hand"),
     "Ignoble Hierarch": ("modeled", "mana_creature", "casts for G, taps next turn for B/R/G"),
     "Imperial Seal": ("modeled", "top_tutor", "top-tutors engine"),
     "Lion's Eye Diamond": ("modeled", "mana_artifact", "casts for 0; priority-hold lines with supported tutors"),
+    "Infernal Plunge": ("modeled", "ritual", "R plus a creature sacrifice produces RRR"),
+    "Jeska's Will": ("partial", "ritual_exile", "with a commander, assumes seven opposing cards and exposes three playable cards until end of turn"),
+    "Jeweled Amulet": ("modeled", "mana_artifact", "stores one available mana and releases that color after untapping"),
     "Lotho, Corrupt Shirriff": ("modeled", "mana_creature", "casts for BW; creates Treasure on second spell"),
     "Lotus Petal": ("modeled", "mana_artifact", "casts for 0, sacrifices for any color"),
     "Mana Vault": ("modeled", "mana_artifact", "casts for 1, taps for CCC"),
     "Manamorphose": ("modeled", "ritual_draw", "filters two mana and draws next known card"),
+    "Mockingbird": ("modeled", "copy_creature", "copies supported nonlegendary creatures within the paid X restriction"),
     "Mox Amber": ("modeled", "mana_artifact", "casts for 0, taps from legendary colors"),
     "Mox Diamond": ("modeled", "mana_artifact", "casts for 0 by discarding a land, taps any color"),
     "Mox Opal": ("modeled", "mana_artifact", "casts for 0, metalcraft taps any color"),
@@ -98,6 +128,8 @@ ACTION_CARDS = {
     "Neoform": ("modeled", "creature_tutor", "sacrifices MV2 creature into Heartwood"),
     "Noble Hierarch": ("modeled", "mana_creature", "casts for G, taps next turn for U/W/G"),
     "Noxious Revival": ("modeled", "graveyard_recursion", "recurs named graveyard cards to the top of library; also remains supported as Offer bait"),
+    "Nature's Rhythm": ("modeled", "creature_tutor", "uses the creature-tutor mode and graveyard Harmonize cost/reduction rules"),
+    "Necropotence": ("partial", "draw", "turbo context uses a thirty-card end-step draw proxy"),
     "Orcish Bowmasters": ("partial", "creature_body", "castable MV2 black creature body; trigger text not modeled"),
     "Paradise Mantle": ("modeled", "mana_artifact", "casts for 0; equips for 1; equipped creature taps if not summoning sick"),
     "Ragavan, Nimble Pilferer": ("modeled", "mana_creature", "casts for R; always-connect Treasure attack next turn"),
@@ -110,14 +142,23 @@ ACTION_CARDS = {
     "Simian Spirit Guide": ("modeled", "free_mana", "exiles for R"),
     "Sol Ring": ("modeled", "mana_artifact", "casts for 1, taps for CC"),
     "Springleaf Drum": ("modeled", "mana_artifact", "casts for 1; taps any untapped creature for any color"),
+    "Seymour Guado": ("modeled", "mana_creature_alias", "uses Kinnan semantics: GU 2/2 and bonus mana from nonland tap sources"),
+    "Shimmerwilds Growth": ("modeled", "mana_enchantment", "enchants a land and adds one chosen color when that land is tapped"),
     "Street Wraith": ("modeled", "draw", "cycles for two life, including during the pre-turn priority window"),
+    "Storm-Kiln Artist": ("modeled", "mana_creature", "creates Treasure for supported instant and sorcery casts"),
     "Summoner's Pact": ("modeled", "creature_tutor", "finds Heartwood or supported green mana creatures with Pact survival check"),
     "The Cabbage Merchant": ("partial", "creature_body", "castable MV3 legendary green body; Food text not modeled"),
     "Tinder Wall": ("modeled", "mana_creature", "casts for G, sacrifices for RR"),
+    "Tainted Pact": ("partial", "tutor", "uses singleton-library determinism to find Rhystic"),
+    "Talisman of Dominance": ("modeled", "mana_artifact", "casts for 2 and taps for colorless, blue, or black"),
+    "Underworld Breach": ("modeled", "graveyard_engine", "escapes supported engines, tutors, rituals, artifacts, and Brain Freeze lines"),
+    "Vexing Bauble": ("modeled", "artifact_draw", "blocks zero-mana spells while active and pays 1 to sacrifice and draw"),
     "Valley Floodcaller": ("partial", "creature_body", "castable MV3 blue creature body; flash/untap text not modeled"),
     "Vampiric Tutor": ("modeled", "top_tutor", "top-tutors engine"),
     "Wild Cantor": ("modeled", "mana_creature", "casts for R/G, sacrifices for any color"),
     "Wishclaw Talisman": ("modeled", "tutor_artifact", "casts for 1B, activates for 1, including LED-priority line"),
+    "Wheel of Fortune": ("modeled", "wheel", "discards the hand and draws seven from the actual library"),
+    "Windfall": ("partial", "wheel", "uses a seven-card draw proxy after discarding the hand"),
     "Worldly Tutor": ("modeled", "top_tutor", "top-tutors Heartwood or supported mana creatures"),
 }
 
@@ -127,6 +168,7 @@ PASSIVE_BY_DESIGN = {
     "Commandeer": "interaction/pitch card",
     "Copy Enchantment": "copy engine excluded from current objective by request",
     "Deflecting Swat": "interaction/pitch card",
+    "Daze": "interaction/pitch card",
     "Dispel": "interaction",
     "Disrupting Shoal": "interaction/pitch card",
     "Faerie Mastermind": "see partial creature-body row",
@@ -141,16 +183,22 @@ PASSIVE_BY_DESIGN = {
     "Misdirection": "interaction/pitch card",
     "Molten Disaster": "win/protection card, not pre-engine acceleration",
     "Mystic Remora": "not optimized in current Rhystic/Heartwood objective",
+    "Mnemonic Betrayal": "opponent graveyards are outside the opening-engine objective",
     "Orcish Bowmasters": "see partial creature-body row",
     "Orim's Chant": "interaction/protection",
     "Pact of Negation": "interaction",
     "Pyroblast": "interaction",
+    "Praetor's Grasp": "opponent libraries are outside the opening-engine objective",
+    "Red Elemental Blast": "interaction",
     "Silence": "interaction/protection",
     "Smothering Tithe": "not a target in current Rhystic/Heartwood objective",
     "Snapback": "interaction/pitch card",
     "Subtlety": "interaction/pitch card",
     "Sudden Substitution": "win/protection card, not pre-engine acceleration",
     "Swan Song": "interaction",
+    "Thassa's Oracle": "win condition rather than pre-engine acceleration",
+    "Clever Impersonator": "copy engine excluded from the current objective",
+    "Into the Flood Maw": "interaction/bounce",
     "The Cabbage Merchant": "see partial creature-body row",
     "Valley Floodcaller": "see partial creature-body row",
     "Wipe Away": "interaction",
@@ -310,7 +358,9 @@ def parse_swaps(path: Path) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
             continue
         label = line.split(":", 1)[0].strip() if ":" in line else ""
         body = line.split(":", 1)[1].strip() if ":" in line else line
-        if body.count("=") == 1:
+        if ";" in body:
+            pairs = [part.split("=", 1) for part in body.split(";") if "=" in part]
+        elif body.count("=") == 1:
             pairs = [body.split("=", 1)]
         else:
             pairs = re.findall(r"([^=,]+?)=([^,]+)(?:,|$)", body)
@@ -402,7 +452,13 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
             writer.writerow({key: row.get(key, "") for key in fieldnames})
 
 
-def write_report(path: Path, rows: list[dict[str, Any]], probes: list[dict[str, Any]], deck: Path, swap_file: Path) -> None:
+def write_report(
+    path: Path,
+    rows: list[dict[str, Any]],
+    probes: list[dict[str, Any]],
+    deck: Path,
+    swap_file: Path | None,
+) -> None:
     counts = Counter(row["status"] for row in rows)
     critical = [row for row in rows if row["status"] == "missing_review" and (row["in_base"] or row["swap_add_count"])]
     failed_probes = [probe for probe in probes if not probe["ok"]]
@@ -410,7 +466,7 @@ def write_report(path: Path, rows: list[dict[str, Any]], probes: list[dict[str, 
         "# Rust coverage audit",
         "",
         f"Deck: `{deck}`",
-        f"Swap file: `{swap_file}`",
+        f"Swap file: `{swap_file}`" if swap_file else "Swap file: none",
         "",
         "## Summary",
         "",
@@ -441,23 +497,31 @@ def write_report(path: Path, rows: list[dict[str, Any]], probes: list[dict[str, 
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--deck-json", default="data/moxfield_tPWeAfl5uXGJdejEnaIwYw_current_rain_over_mindbreak_20260701.json")
-    parser.add_argument("--swap-file", default="data/rhystic_study_turn12/mild_objective_stage1_paired_swaps_20260704.txt")
-    parser.add_argument("--binary", default="rust/rhystic_core/target/release/rhystic-core-smoke")
-    parser.add_argument("--csv-out", default="data/rhystic_study_turn12/rust_coverage_audit_20260704.csv")
-    parser.add_argument("--report-out", default="data/rhystic_study_turn12/rust_coverage_audit_20260704.md")
+    parser = argparse.ArgumentParser(
+        description="Audit simulator semantics only for cards reachable from a deck and optional swap file."
+    )
+    parser.add_argument("--deck-json", required=True)
+    parser.add_argument("--swap-file", default=None)
+    parser.add_argument("--binary", default="target/release/rhystic-core-smoke")
+    parser.add_argument("--csv-out", default=None)
+    parser.add_argument("--report-out", default=None)
+    parser.add_argument(
+        "--fail-on-unsupported",
+        action="store_true",
+        help="Return a failure status when a base/add card has no explicit semantic classification.",
+    )
     args = parser.parse_args()
 
     deck_path = (ROOT / args.deck_json).resolve()
-    swap_path = (ROOT / args.swap_file).resolve()
+    swap_path = (ROOT / args.swap_file).resolve() if args.swap_file else None
     binary = (ROOT / args.binary).resolve()
     names = read_deck_names(deck_path)
-    cuts, adds = parse_swaps(swap_path)
+    cuts, adds = parse_swaps(swap_path) if swap_path else (defaultdict(set), defaultdict(set))
     all_cards = sorted(set(names) | set(cuts) | set(adds))
     probes_by_card: dict[str, dict[str, Any]] = {}
     probe_results: list[dict[str, Any]] = []
-    for card, spec in PROBES.items():
+    for card in sorted(set(PROBES) & set(all_cards)):
+        spec = PROBES[card]
         result = run_probe(binary, card, spec)
         probes_by_card[card] = result
         probe_results.append(result)
@@ -483,17 +547,31 @@ def main() -> int:
             }
         )
 
-    write_csv((ROOT / args.csv_out).resolve(), rows)
-    write_report((ROOT / args.report_out).resolve(), rows, probe_results, Path(args.deck_json), Path(args.swap_file))
+    if args.csv_out:
+        write_csv((ROOT / args.csv_out).resolve(), rows)
+    if args.report_out:
+        write_report(
+            (ROOT / args.report_out).resolve(),
+            rows,
+            probe_results,
+            Path(args.deck_json),
+            Path(args.swap_file) if args.swap_file else None,
+        )
+    unsupported = [
+        row["card"]
+        for row in rows
+        if row["status"] == "missing_review" and (row["in_base"] or row["swap_add_count"])
+    ]
     summary = {
         "rows": len(rows),
         "statuses": dict(sorted(Counter(row["status"] for row in rows).items())),
         "failed_probes": [probe["card"] for probe in probe_results if not probe["ok"]],
+        "unsupported": unsupported,
         "csv": args.csv_out,
         "report": args.report_out,
     }
     print(json.dumps(summary, indent=2, sort_keys=True))
-    return 1 if summary["failed_probes"] else 0
+    return 1 if summary["failed_probes"] or (args.fail_on_unsupported and unsupported) else 0
 
 
 if __name__ == "__main__":

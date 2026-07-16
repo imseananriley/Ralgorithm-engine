@@ -13,9 +13,19 @@ EXCLUDED_PARTS = {".git", "target", "__pycache__", "artifacts", "benchmarks", "d
 
 
 def tracked_source_files() -> list[Path]:
+    completed = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        check=True,
+    )
     files: list[Path] = []
-    for path in ROOT.rglob("*"):
-        if not path.is_file() or any(part in EXCLUDED_PARTS for part in path.parts):
+    for raw in completed.stdout.split(b"\0"):
+        if not raw:
+            continue
+        relative = Path(raw.decode())
+        path = ROOT / relative
+        if not path.is_file() or any(part in EXCLUDED_PARTS for part in relative.parts):
             continue
         if path.suffix in {".pyc", ".prof"}:
             continue

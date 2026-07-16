@@ -1,0 +1,36 @@
+# One-turn and persistent acceleration.
+Birds of Paradise
+Ragavan, Nimble Pilferer
+Wild Cantor
+Mox Opal
+Arcane Signet
+Paradise Mantle
+Springleaf Drum
+Grim Monolith
+Jeweled Amulet
+Relic of Legends
+Cabal Ritual
+Infernal Plunge
+
+# Engine access.
+Beseech the Mirror
+Worldly Tutor
+Grim Tutor
+Chord of Calling
+Finale of Devastation
+Nature's Rhythm
+
+# Gas.
+Street Wraith
+
+# Fetch/typed-land system candidates.
+Flooded Strand
+Wooded Foothills
+Hallowed Fountain
+Tropical Island
+Volcanic Island
+Savannah
+Blood Crypt
+Breeding Pool
+Steam Vents
+Phyrexian Tower

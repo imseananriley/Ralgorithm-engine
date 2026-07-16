@@ -76,6 +76,8 @@ pub struct EngineOpeningModel {
     angels_grace_slot: Option<SlotId>,
     semantic_classes: [u8; 128],
     quotient_draws: bool,
+    commander_base_cost: Cost,
+    commander_colors: u8,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -104,6 +106,14 @@ impl Default for OpeningMulliganPolicy {
 
 impl EngineOpeningModel {
     pub fn compile(deck: &DeckSpec, max_turn: u8) -> Self {
+        Self::compile_with_commander(deck, max_turn, None)
+    }
+
+    pub fn compile_with_commander(deck: &DeckSpec, max_turn: u8, commander: Option<&str>) -> Self {
+        let (commander_base_cost, commander_colors) = match commander {
+            Some("Rograkh, Son of Rohgahh") => ([0, 0, 0, 0, 0, 0], 1 << 1),
+            _ => ([0, 0, 0, 0, 1, 0], 1 << 3),
+        };
         let mut cards = Vec::with_capacity(deck.cards().len());
         let mut engine_slots = CardMask::EMPTY;
         let mut supported_slots = CardMask::EMPTY;
@@ -169,6 +179,8 @@ impl EngineOpeningModel {
             angels_grace_slot,
             semantic_classes: deck.semantic_classes(),
             quotient_draws: true,
+            commander_base_cost,
+            commander_colors,
         }
     }
 
@@ -819,7 +831,7 @@ impl EngineOpeningModel {
     fn mox_amber_colors(&self, state: PackedStateV2) -> u8 {
         let mut colors = 0;
         if state.commander.zone == CommanderZone::Battlefield {
-            colors |= 1 << 3;
+            colors |= self.commander_colors;
         }
         for legendary in state.battlefield.as_slice().iter().filter_map(|permanent| {
             let slot = permanent.source().card_slot()?;
@@ -1115,7 +1127,8 @@ impl EngineOpeningModel {
         if state.commander.zone != CommanderZone::Command {
             return;
         }
-        let cost = [state.commander.tax, 0, 0, 0, 1, 0];
+        let mut cost = self.commander_base_cost;
+        cost[0] = cost[0].saturating_add(state.commander.tax);
         if self.direct_payments {
             for plan in self.payment_plans(state, cost) {
                 let Some(mut next) = self.apply_payment_plan(state, plan) else {
@@ -3043,6 +3056,21 @@ mod tests {
             panic!("Mox Amber activation must be deterministic");
         };
         assert_eq!(white_mana.mana, ManaPool([0, 0, 0, 1, 0, 0]));
+    }
+
+    #[test]
+    fn rograkh_commander_is_free_and_enables_red_amber() {
+        let deck = DeckSpec::compile(&["Mox Amber".to_string()]).expect("Amber deck");
+        let model =
+            EngineOpeningModel::compile_with_commander(&deck, 2, Some("Rograkh, Son of Rohgahh"));
+        let mut out = SmallVec::new();
+        model.generate_commander_cast(PackedStateV2::default(), &mut out);
+        let InformationTransition::Deterministic(with_rog) = out[0] else {
+            panic!("Rograkh cast is deterministic");
+        };
+        assert_eq!(with_rog.commander.zone, CommanderZone::Battlefield);
+        assert_eq!(model.mox_amber_colors(with_rog), 1 << 1);
+        assert_eq!(with_rog.commander.tax, 2);
     }
 
     #[test]

@@ -36,6 +36,8 @@ pub struct OpeningReplayGame {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpeningReplayRequest {
     pub deck: Vec<String>,
+    #[serde(default)]
+    pub commander: Option<String>,
     pub games: Vec<OpeningReplayGame>,
     #[serde(default = "default_max_turn")]
     pub max_turn: u8,
@@ -112,7 +114,11 @@ pub fn evaluate_opening_replay(
         return Err("opening replay requires at least one discrepancy budget".to_string());
     }
     let deck = DeckSpec::compile(&request.deck)?;
-    let model = EngineOpeningModel::compile(&deck, request.max_turn);
+    let model = EngineOpeningModel::compile_with_commander(
+        &deck,
+        request.max_turn,
+        request.commander.as_deref(),
+    );
     let workers = request.workers.max(1).min(request.games.len());
     let next = AtomicUsize::new(0);
     let outcomes = Mutex::new(Vec::with_capacity(request.games.len()));
@@ -812,6 +818,7 @@ mod tests {
             ]
             .map(str::to_string)
             .to_vec(),
+            commander: None,
             games: vec![OpeningReplayGame {
                 game_index: 17,
                 hand: ["Ancient Tomb", "Lotus Petal", "Rhystic Study"]
@@ -925,6 +932,7 @@ mod tests {
         ];
         let response = evaluate_opening_replay(&OpeningReplayRequest {
             deck,
+            commander: None,
             games,
             max_turn: 2,
             depth: 14,

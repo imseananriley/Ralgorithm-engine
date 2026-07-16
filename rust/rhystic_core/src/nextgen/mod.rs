@@ -404,6 +404,7 @@ mod tests {
                 gamble_mode: None,
                 gamble_seed: None,
                 simplified_gamble: false,
+                commander: None,
             });
             assert_eq!(
                 packed_hit,
@@ -449,6 +450,7 @@ mod tests {
             gamble_mode: None,
             gamble_seed: None,
             simplified_gamble: false,
+            commander: None,
         });
         assert_eq!(packed.value, 0.75);
         assert_eq!(fast.turn, Some(2));
@@ -488,6 +490,7 @@ mod tests {
             gamble_mode: None,
             gamble_seed: None,
             simplified_gamble: false,
+            commander: None,
         });
         assert_eq!(packed_value, 1.0);
         assert_eq!(fast.turn, Some(1));
@@ -556,6 +559,7 @@ mod tests {
                 gamble_mode: None,
                 gamble_seed: None,
                 simplified_gamble: false,
+                commander: None,
             });
             assert_eq!(
                 packed_hit,

@@ -1,0 +1,40 @@
+# Ordinary lands whose exact color/fetch contribution remains uncertain.
+Glimmervoid
+Badlands
+Bayou
+Taiga
+Scrubland
+Tundra
+Underground Sea
+Crystal Vein
+City of Traitors
+Arid Mesa
+Bloodstained Mire
+Marsh Flats
+Misty Rainforest
+Polluted Delta
+Scalding Tarn
+Verdant Catacombs
+Windswept Heath
+
+# Acceleration and tutors. Interaction/value cards are deliberately absent.
+Crop Rotation
+Culling the Weak
+Deathrite Shaman
+Diabolic Intent
+Eldritch Evolution
+Elvish Spirit Guide
+Enlightened Tutor
+Gamble
+Green Sun's Zenith
+Lion's Eye Diamond
+Manamorphose
+Mox Amber
+Mystical Tutor
+Rain of Filth
+Rite of Flame
+Scheming Symmetry
+Simian Spirit Guide
+Summoner's Pact
+Tinder Wall
+Wishclaw Talisman

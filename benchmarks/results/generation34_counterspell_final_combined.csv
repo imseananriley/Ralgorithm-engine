@@ -1,0 +1,6 @@
+variant,cut,add,games,success_rate,rate_delta_pp,rate_delta_ci_low_pp,rate_delta_ci_high_pp,weighted_score,score_delta,score_delta_ci_low,score_delta_ci_high,raw_discovery_score_delta_pp
+baseline,,,2000,0.7295,0.000,0.000,0.000,0.507875,0.000000,0.000000,0.000000,
+culling_to_dispel,Culling the Weak,Dispel,2000,0.7220,-0.750,-1.463,-0.037,0.503250,-0.004625,-0.009650,0.000200,-0.4500
+rain_to_dispel,Rain of Filth,Dispel,2000,0.7235,-0.600,-1.378,0.178,0.501925,-0.005950,-0.011625,-0.000275,-0.6611
+probe_to_dispel,Gitaxian Probe,Dispel,2000,0.7235,-0.600,-1.247,0.047,0.502075,-0.005800,-0.010500,-0.001225,
+tundra_to_dispel,Tundra,Dispel,2000,0.7195,-1.000,-1.859,-0.141,0.499250,-0.008625,-0.014975,-0.002450,-0.5264

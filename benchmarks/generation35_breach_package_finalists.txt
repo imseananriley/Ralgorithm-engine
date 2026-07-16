@@ -1,0 +1,4 @@
+culling_probe_to_breach_freeze: Culling the Weak=Underworld Breach; Gitaxian Probe=Brain Freeze
+culling_rain_to_breach_freeze: Culling the Weak=Underworld Breach; Rain of Filth=Brain Freeze
+rain_probe_to_breach_freeze: Rain of Filth=Underworld Breach; Gitaxian Probe=Brain Freeze
+culling_to_breach: Culling the Weak=Underworld Breach

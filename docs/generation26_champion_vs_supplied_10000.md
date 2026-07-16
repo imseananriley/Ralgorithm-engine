@@ -54,7 +54,7 @@ The supplied-minus-champion paired delta is **-0.88 percentage points** (95% CI 
 `p = 3.37e-6`.
 
 After excluding every hand capped in either arm, 9,444 pairs remain. The complete-case delta
-is **-0.94 percentage points** (95% CI -1.31 to -0.58; exact McNemar `p = 5.54e-7`). The
+is **-0.94 perc entage points** (95% CI -1.31 to -0.58; exact McNemar `p = 5.54e-7`). The
 direction and magnitude therefore are not explained by the supplied list having fewer caps.
 
 ## Decision

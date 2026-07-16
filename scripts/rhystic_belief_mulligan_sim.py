@@ -20,6 +20,8 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any
 
+from source_digest import engine_source_digest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SOLVER_PATH = ROOT / "scripts" / "rhystic_study_calc.py"
@@ -102,6 +104,16 @@ def read_moxfield_deck(path: str | Path) -> tuple[str, list[str], list[str]]:
     name = (payload.get("name") or Path(path).stem).strip()
     commanders: list[str] = []
     mainboard: list[str] = []
+    compact_commanders = payload.get("commanders")
+    if isinstance(compact_commanders, list):
+        commanders.extend(canonical_card_name(card) for card in compact_commanders)
+    elif isinstance(payload.get("commander"), str):
+        commanders.append(canonical_card_name(payload["commander"]))
+        if isinstance(payload.get("secondary_commander"), str):
+            commanders.append(canonical_card_name(payload["secondary_commander"]))
+    if isinstance(payload.get("deck"), list):
+        mainboard.extend(canonical_card_name(card) for card in payload["deck"])
+
     boards = payload.get("boards") or {}
     for entry in (boards.get("commanders") or {}).get("cards", {}).values():
         card = canonical_card_name(entry["card"]["name"])
@@ -155,8 +167,10 @@ def threshold_cache_key(
     rhystic_t2_weight: float,
     heartwood_t1_weight: float,
     heartwood_t2_weight: float,
+    engine_source_digest_value: str,
 ) -> str:
     payload = {
+        "engine_source_digest": engine_source_digest_value,
         "deck": deck_identity_value,
         "target": target,
         "threshold_hands": threshold_hands,
@@ -556,9 +570,10 @@ def run_rust_policy_eval_with_thresholds(
         shard_workers = min(len(shard_counts), max(1, int(args.workers)))
     shard_workers = max(1, min(int(shard_workers), len(shard_counts)))
     shard_specs = []
+    game_offset = 0
     for shard_index, shard_games in enumerate(shard_counts):
-        shard_seed = stable_seed(eval_seed, "rust-full-sim-shard", shard_index)
-        shard_specs.append((shard_index, shard_games, shard_seed))
+        shard_specs.append((shard_index, game_offset, shard_games))
+        game_offset += shard_games
     print(
         f"rust full-sim policy eval shards={len(shard_specs)} workers={shard_workers} games={args.eval_games}",
         file=sys.stderr,
@@ -566,13 +581,14 @@ def run_rust_policy_eval_with_thresholds(
     )
 
     def run_shard(spec: tuple[int, int, int]) -> dict[str, Any]:
-        shard_index, shard_games, shard_seed = spec
+        shard_index, shard_offset, shard_games = spec
         shard_request = {
             **common_request,
             "thresholds_dead": thresholds_by_gemstone_key["dead"],
             "thresholds_live": thresholds_by_gemstone_key.get("live", thresholds_by_gemstone_key["dead"]),
             "games": shard_games,
-            "seed": shard_seed,
+            "seed": eval_seed,
+            "game_offset": shard_offset,
         }
         started = time.time()
         evaluation = run_rust_policy_eval_request(module=module, args=args, request=shard_request)
@@ -580,8 +596,9 @@ def run_rust_policy_eval_with_thresholds(
             raise RuntimeError(f"Rust policy eval shard {shard_index} unsupported: {evaluation.get('unsupported_reason')}")
         return {
             "shard_index": shard_index,
+            "game_offset": shard_offset,
             "games": shard_games,
-            "seed": shard_seed,
+            "seed": eval_seed,
             "elapsed_seconds": time.time() - started,
             "evaluation": evaluation,
         }
@@ -612,6 +629,7 @@ def run_rust_policy_eval_with_thresholds(
         [
             {
                 "shard_index": int(shard["shard_index"]),
+                "game_offset": int(shard["game_offset"]),
                 "games": int(shard["games"]),
                 "seed": int(shard["seed"]),
                 "elapsed_seconds": float(shard["elapsed_seconds"]),
@@ -794,6 +812,7 @@ def rust_full_sim_payload(
         "threshold_rows_by_gemstone_caverns_live": threshold_rows_by_gemstone_key,
     }
     return {
+        "engine_source_digest": engine_source_digest(ROOT),
         "target": args.target,
         "deck": deck_key,
         "deck_json": args.deck_json,
@@ -3362,6 +3381,7 @@ def main() -> int:
     parser.add_argument("--json-out", default=None)
     parser.add_argument("--checkpoint-out", default=None)
     args = parser.parse_args()
+    source_digest = engine_source_digest(ROOT)
     if not 0.0 <= args.gemstone_caverns_live_rate <= 1.0:
         raise ValueError("--gemstone-caverns-live-rate must be between 0 and 1")
     if args.remora_upkeep_payments < 0:
@@ -3450,6 +3470,7 @@ def main() -> int:
                 rhystic_t2_weight=args.rhystic_t2_weight,
                 heartwood_t1_weight=args.heartwood_t1_weight,
                 heartwood_t2_weight=args.heartwood_t2_weight,
+                engine_source_digest_value=source_digest,
             )
             + ".json"
         )
@@ -3626,6 +3647,7 @@ def main() -> int:
     )
     eval_elapsed = time.time() - eval_started
     payload = {
+        "engine_source_digest": source_digest,
         "target": args.target,
         "deck": deck_key,
         "deck_json": args.deck_json,

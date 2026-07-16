@@ -65,6 +65,8 @@ def mainboard_entries(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def mainboard_names(payload: dict[str, Any]) -> list[str]:
+    if isinstance(payload.get("deck"), list):
+        return list(payload["deck"])
     names: list[str] = []
     for entry in mainboard_entries(payload).values():
         qty = int(entry.get("quantity", 1))
@@ -81,6 +83,43 @@ def write_variant_deck(
     swaps: tuple[tuple[str, str], ...] = (),
 ) -> None:
     payload = read_moxfield(source)
+    if isinstance(payload.get("deck"), list):
+        replacements = swaps or (
+            ((cut, add),) if cut is not None and add is not None else ()
+        )
+        deck = list(payload["deck"])
+        cuts = [cut_name for cut_name, _add_name in replacements]
+        adds = [add_name for _cut_name, add_name in replacements]
+        if len(set(cuts)) != len(cuts):
+            raise ValueError(f"Duplicate cut card in grouped variant: {cuts}")
+        if len(set(adds)) != len(adds):
+            raise ValueError(f"Duplicate add card in grouped variant: {adds}")
+        for add_name in adds:
+            if add_name in COMMANDER_BANNED_OR_NOT_LEGAL:
+                raise ValueError(f"{add_name} is not legal for Commander testing in this harness.")
+        cut_indexes: list[int] = []
+        for cut_name in cuts:
+            try:
+                cut_indexes.append(deck.index(cut_name))
+            except ValueError as exc:
+                raise ValueError(f"Cut card is not in the mainboard: {cut_name}") from exc
+        remaining = [card for index, card in enumerate(deck) if index not in set(cut_indexes)]
+        for add_name in adds:
+            if add_name in remaining:
+                raise ValueError(
+                    f"Adding {add_name} would create a singleton violation after grouped cuts."
+                )
+        for index, (_cut_name, add_name) in zip(cut_indexes, replacements):
+            deck[index] = add_name
+        payload["deck"] = deck
+        if replacements:
+            swap_label = ", ".join(
+                f"{cut_name} -> {add_name}" for cut_name, add_name in replacements
+            )
+            payload["name"] = f"{payload.get('name', source.stem)} [{swap_label}]"
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
     cards = mainboard_entries(payload)
     if not swaps:
         if cut is not None and add is not None:
