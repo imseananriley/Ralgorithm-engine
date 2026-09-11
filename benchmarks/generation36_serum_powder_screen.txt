@@ -1,0 +1,8 @@
+culling_to_powder: Culling the Weak=Serum Powder
+rain_to_powder: Rain of Filth=Serum Powder
+rite_to_powder: Rite of Flame=Serum Powder
+probe_to_powder: Gitaxian Probe=Serum Powder
+manamorphose_to_powder: Manamorphose=Serum Powder
+birds_to_powder: Birds of Paradise=Serum Powder
+wishclaw_to_powder: Wishclaw Talisman=Serum Powder
+eldritch_to_powder: Eldritch Evolution=Serum Powder

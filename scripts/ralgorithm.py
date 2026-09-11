@@ -4,18 +4,24 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from deck_io import load_deck, parse_text_export, validate_deck_payload, write_deck
+from deck_io import commander_names, load_deck, parse_text_export, validate_deck_payload, write_deck
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DECK = ROOT / "fixtures" / "decks" / "nick_fury_generation32_balanced_optimized.json"
 DEFAULT_SWAPS = ROOT / "benchmarks" / "generation35_breach_package_finalists.txt"
+SUPPORTED_COMMANDERS = {
+    frozenset({"Nick Fury, Agent of S.H.I.E.L.D."}),
+    frozenset({"Rograkh, Son of Rohgahh", "Silas Renn, Seeker Adept"}),
+    frozenset({"Rograkh, Son of Rohgahh", "Thrasios, Triton Hero"}),
+}
 
 PRESETS = {
     "smoke": {
@@ -53,12 +59,28 @@ def resolve(path: str | Path) -> Path:
     return value if value.is_absolute() else ROOT / value
 
 
+def positive_int(value: str) -> int:
+    number = int(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return number
+
+
 def require_valid_deck(path: Path) -> dict[str, object]:
     payload = load_deck(path)
     errors = validate_deck_payload(payload)
     if errors:
         raise ValueError("invalid deck:\n- " + "\n- ".join(errors))
     return payload
+
+
+def require_supported_commanders(payload: dict[str, object]) -> None:
+    if frozenset(commander_names(payload)) not in SUPPORTED_COMMANDERS:
+        raise ValueError(
+            "commander configuration has no audited production model; supported: "
+            "Nick Fury, Rograkh/Silas, Rograkh/Thrasios. Import is available for other "
+            "decks, but their commander semantics must be implemented before comparing."
+        )
 
 
 def run(command: list[str], *, env: dict[str, str] | None = None, dry_run: bool = False) -> None:
@@ -110,9 +132,10 @@ def command_check(args: argparse.Namespace) -> int:
         return 2
     if not args.semantic:
         return 0
+    require_supported_commanders(payload)
 
     binary = ROOT / "target" / "release" / "rhystic-core-smoke"
-    if not binary.exists() and not args.no_build:
+    if not args.no_build:
         run(["cargo", "build", "--release", "--locked", "-p", "rhystic_core", "--bin", "rhystic-core-smoke"])
     command = [
         sys.executable,
@@ -131,13 +154,16 @@ def command_check(args: argparse.Namespace) -> int:
 def command_compare(args: argparse.Namespace) -> int:
     deck = resolve(args.deck)
     swap_file = resolve(args.swap_file)
-    require_valid_deck(deck)
+    require_supported_commanders(require_valid_deck(deck))
     if not swap_file.exists():
         raise FileNotFoundError(f"swap file not found: {swap_file}")
 
     preset = dict(PRESETS[args.preset])
-    games = args.games or preset["eval_games"]
-    workers = args.workers or max(1, min(8, (os.cpu_count() or 2) - 1))
+    games = args.games if args.games is not None else preset["eval_games"]
+    workers = args.workers if args.workers is not None else max(1, min(2, (os.cpu_count() or 2) - 1))
+    if args.seed is None:
+        args.seed = secrets.randbits(63)
+    print(f"Root seed: {args.seed} (reuse explicitly for paired replication)", flush=True)
     out_dir = (
         resolve(args.out)
         if args.out
@@ -154,6 +180,19 @@ def command_compare(args: argparse.Namespace) -> int:
             env=env,
             dry_run=args.dry_run,
         )
+
+    run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "rhystic_rust_coverage_audit.py"),
+            "--deck-json", str(deck),
+            "--swap-file", str(swap_file),
+            "--binary", str(ROOT / "target" / "release" / "rhystic-core-smoke"),
+            "--fail-on-unsupported",
+        ],
+        env=env,
+        dry_run=args.dry_run,
+    )
 
     command = [
         sys.executable,
@@ -241,9 +280,9 @@ def parser() -> argparse.ArgumentParser:
     compare.add_argument("--swap-file", default=str(DEFAULT_SWAPS))
     compare.add_argument("--out")
     compare.add_argument("--preset", choices=tuple(PRESETS), default="smoke")
-    compare.add_argument("--games", type=int)
-    compare.add_argument("--workers", type=int)
-    compare.add_argument("--seed", type=int, default=2026071601)
+    compare.add_argument("--games", type=positive_int)
+    compare.add_argument("--workers", type=positive_int)
+    compare.add_argument("--seed", type=int, help="root seed; defaults to a fresh random seed for each invocation")
     compare.add_argument("--native", action="store_true", help="compile for this CPU; resulting binary is not portable")
     compare.add_argument("--no-build", action="store_true")
     compare.add_argument("--dry-run", action="store_true")

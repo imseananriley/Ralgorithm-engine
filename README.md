@@ -13,7 +13,8 @@ draw effects must be audited before results are trusted.
 ## Requirements
 
 - Rust stable with Cargo
-- Python 3.10 or newer; runtime scripts use only the standard library
+- Python 3.10 or newer; Python 3.12+ enables the much faster exact multinomial bootstrap.
+  Runtime scripts use only the standard library.
 - macOS or Linux for the tested multiprocessing and benchmark workflows
 
 ## Quick Start
@@ -32,10 +33,18 @@ python3 scripts/ralgorithm.py compare --preset smoke
 ```
 
 Use `--preset local` for 2,000 games per variant or `--preset publication` for 10,000.
+The preset name is historical: 10,000 games alone do not establish publication-quality
+evidence. Use the [sample-size guide](docs/statistical_experiment_design.md) to choose a
+confirmatory sample for the effect size and number of candidates.
 Results are written under `benchmarks/results/`, while threshold and baseline caches are
 shared under `.cache/ralgorithm/` so later experiments do not recompute identical work.
 Cache keys include a digest of the Rust engine and orchestration sources, preventing stale
 results from surviving a code change.
+
+Each invocation generates a fresh root seed and prints it. Pass `--seed <recorded-seed>`
+and the same output directory to resume or reproduce an experiment. Repeated identical
+games provide no additional statistical evidence. Two workers are used by default to keep
+local CPU use moderate; increase `--workers` explicitly when appropriate.
 
 ## Bring A Deck
 
@@ -50,6 +59,11 @@ python3 scripts/ralgorithm.py import-deck deck.txt fixtures/decks/my_deck.json \
 Repeat `--commander` for partners. `SIDEBOARD:` starts the sideboard section. Structural
 validation enforces the expected 99-card or 98-card mainboard and Commander singleton
 rules.
+
+Production commander models currently cover Nick Fury, Rograkh/Silas, and
+Rograkh/Thrasios. Other lists can be imported, but comparison is rejected until their
+commander semantics are implemented. Structural validation allows repeated basic lands;
+it is not a live Commander ban-list, color-identity, or partner-legality check.
 
 Audit semantic coverage before simulating a new list:
 
@@ -82,7 +96,7 @@ python3 scripts/ralgorithm.py compare \
   --workers 4
 ```
 
-The runner builds the release binary, enables paired stage orders and stochastic Gamble,
+The runner builds the release binary, checks semantic coverage, enables paired stage orders and stochastic Gamble,
 uses a shared mulligan policy and common random numbers, reruns capped actual hands at a
 higher state limit, bootstraps weighted-score intervals, and reuses validated caches. Use
 `--native` for a machine-specific binary compiled with `-C target-cpu=native`.
@@ -90,6 +104,9 @@ higher state limit, bootstraps weighted-score intervals, and reuses validated ca
 Policy randomness is derived from the root seed and global game index. Changing process or
 internal shard boundaries therefore preserves the exact sampled games while allowing CPU
 parallelism to reduce wall time.
+Rust full-policy hands use card-identity random priorities: input order and the replaced
+card's array slot do not determine where the added card appears. Legacy raw-slot screens
+retain their explicitly conditional design and must be confirmed with full-policy games.
 
 ## Validate Recorded Games
 
@@ -112,11 +129,15 @@ Open `http://127.0.0.1:8765`. Simulator runs intended for manual replay should i
 - `fixtures`: deck and action-parity corpora.
 - `docs`: architecture, methodology, benchmark generations, and retained experiments.
 
-The fixed-library solver is a high-recall search oracle. Publication estimates use a frozen,
-nonanticipating mulligan policy, paired randomness, and full-library witness validation.
+The fixed-library solver is a high-recall search oracle. Its results depend on modeled
+opponents, search caps, mulligan training, and the treatment of post-shuffle draws.
+Witness validation checks line legality; it is not proof of an optimal nonanticipating
+play policy or of real tournament win probability. See the
+[publication audit](docs/publication_audit_20260911.md) for fixes and remaining limitations.
 Read [architecture](docs/architecture.md) and
 [paired-rate methodology](docs/rhystic_paired_rate_methodology.md) before interpreting
-results.
+results. Use the [statistical experiment design](docs/statistical_experiment_design.md)
+guide to plan sample sizes, candidate-family corrections, and fresh-seed confirmation.
 
 ## Performance And Reproducibility
 

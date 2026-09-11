@@ -67,7 +67,8 @@ single: Culling the Weak=Dispel
 package: Rain of Filth=Underworld Breach; Gitaxian Probe=Brain Freeze
 ```
 
-Paired experiments preserve slot positions and random streams across the baseline and each
-candidate. This reduces variance but does not make a small sample conclusive. Screen broadly,
+Rust full-policy experiments use card-identity random priorities shared across variants.
+Raw changed-slot screens still condition on the changed slot and answer a different question.
+Pairing reduces variance but does not make a small sample conclusive. Screen broadly,
 then validate finalists with an independent seed and report paired confidence intervals,
 discordant counts, cap misses, and weighted-score effects.

@@ -488,6 +488,7 @@ fn action_templates(name: &str, flags: CardFlags) -> ActionTemplateMask {
         | "Grim Monolith"
         | "Grinding Station"
         | "Jeweled Amulet"
+        | "Serum Powder"
         | "Talisman of Dominance"
         | "Vexing Bauble" => templates.insert(ActionTemplateMask::ARTIFACT_SPELL),
         "Birds of Paradise"
@@ -573,7 +574,7 @@ fn payment_gate_costs(name: &str) -> [Option<Cost>; 2] {
             ([2, 0, 0, 0, 0, 0], None)
         }
         "Arcane Signet" => ([2, 0, 0, 0, 0, 0], None),
-        "Relic of Legends" => ([3, 0, 0, 0, 0, 0], None),
+        "Relic of Legends" | "Serum Powder" => ([3, 0, 0, 0, 0, 0], None),
         "Wishclaw Talisman" => ([1, 1, 0, 0, 0, 0], None),
         "Birds of Paradise" | "Ignoble Hierarch" | "Noble Hierarch" | "Tinder Wall" => {
             ([0, 0, 0, 0, 0, 1], None)
@@ -778,6 +779,7 @@ fn is_mana_card(name: &str) -> bool {
             | "Mox Opal"
             | "Rain of Filth"
             | "Rite of Flame"
+            | "Serum Powder"
             | "Simian Spirit Guide"
             | "Sol Ring"
             | "Springleaf Drum"

@@ -14,6 +14,7 @@ def engine_source_digest(root: Path) -> str:
         root / "scripts" / "rhystic_quick_compare.py",
         root / "scripts" / "rhystic_study_calc.py",
         root / "scripts" / "source_digest.py",
+        root / "scripts" / "deck_io.py",
         *(root / "rust" / "rhystic_core" / "src").rglob("*.rs"),
     ]
     digest = hashlib.blake2b(digest_size=16)

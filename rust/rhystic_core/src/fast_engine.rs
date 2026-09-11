@@ -406,6 +406,7 @@ pub enum FastPermKind {
     Shimmer = 66,
     FetchLand = 67,
     Breach = 68,
+    Powder = 69,
 }
 
 impl FastPermKind {
@@ -479,6 +480,7 @@ impl FastPermKind {
             "SHIMMER" => Self::Shimmer,
             "FETCH_LAND" => Self::FetchLand,
             "BREACH" => Self::Breach,
+            "POWDER" => Self::Powder,
             _ => Self::Unknown,
         }
     }
@@ -553,6 +555,7 @@ impl FastPermKind {
             66 => Self::Shimmer,
             67 => Self::FetchLand,
             68 => Self::Breach,
+            69 => Self::Powder,
             _ => Self::Unknown,
         }
     }
@@ -628,6 +631,7 @@ impl FastPermKind {
             Self::Shimmer => "SHIMMER",
             Self::FetchLand => "FETCH_LAND",
             Self::Breach => "BREACH",
+            Self::Powder => "POWDER",
         }
     }
 
@@ -725,6 +729,7 @@ impl FastPermKind {
                 | Self::Amulet
                 | Self::Bauble
                 | Self::Pollinator
+                | Self::Powder
         )
     }
 
@@ -3379,6 +3384,7 @@ fn generate_fast_artifact_spell_actions_for_cost(
             FastPermKind::Talisman,
             [2, 0, 0, 0, 0, 0],
         ),
+        ("Serum Powder", FastPermKind::Powder, [3, 0, 0, 0, 0, 0]),
         ("Vexing Bauble", FastPermKind::Bauble, [1, 0, 0, 0, 0, 0]),
     ] {
         if !payment_cost_matches(cost_filter, cost) {
@@ -6013,6 +6019,7 @@ fn fast_tap_options(state: &FastState, perm: FastPerm) -> SmallVec<[FastTap; 5]>
             out.push(FastTap::Color(0));
             out.push(FastTap::Color(3));
         }
+        FastPermKind::Powder => out.push(FastTap::Colorless(1)),
         FastPermKind::Signet => push_color_mask_options(&mut out, perm.colors()),
         FastPermKind::Relic => {
             for color in 0..5 {
@@ -7007,6 +7014,7 @@ pub(crate) fn is_artifact_card_name(card: &str) -> bool {
             | "Mox Opal"
             | "Paradise Mantle"
             | "Relic of Legends"
+            | "Serum Powder"
             | "Sol Ring"
             | "Springleaf Drum"
             | "Talisman of Dominance"
@@ -7966,6 +7974,7 @@ fn trace_perm_name(ctx: &FastContext, perm: FastPerm) -> String {
         FastPermKind::Shimmer => "Shimmerwilds Growth".to_string(),
         FastPermKind::FetchLand => ctx.interned_string(perm.extra_id()).to_string(),
         FastPermKind::Breach => "Underworld Breach".to_string(),
+        FastPermKind::Powder => "Serum Powder".to_string(),
         FastPermKind::Unknown => "permanent".to_string(),
     }
 }
@@ -9546,6 +9555,10 @@ fn rng_metadata() -> BTreeMap<String, String> {
             "global game index independent of process or internal shard boundaries".to_string(),
         ),
         (
+            "policy_shuffle".to_string(),
+            "identity-keyed BLAKE2b-128 priorities, policy_card_priority_v1; independent of input ordering and replacement slot".to_string(),
+        ),
+        (
             "domains".to_string(),
             "threshold_order, threshold_visible, policy_stage_order, gemstone_caverns_live, policy_visible, policy_actual, selection_shuffle, selection, validation_shuffle, validation"
                 .to_string(),
@@ -9622,7 +9635,28 @@ fn policy_shuffle_order(
     stage: usize,
 ) -> Vec<String> {
     let seed_parts = vec![game_index.to_string(), stage.to_string()];
-    shuffled_copy(deck, seed, "policy_stage_order", &seed_parts, None)
+    let seed_bytes = rust_stable_seed_bytes(seed, "policy_card_priority_v1", &seed_parts, None);
+    let mut domain = Blake2bVar::new(16).expect("valid digest size");
+    domain.update(&seed_bytes);
+    let mut copies: FxHashMap<&str, u64> = FxHashMap::default();
+    let mut keyed = Vec::with_capacity(deck.len());
+    for card in deck {
+        let copy = copies.entry(card.as_str()).or_default();
+        let mut hash = domain.clone();
+        hash.update(&(card.len() as u64).to_le_bytes());
+        hash.update(card.as_bytes());
+        hash.update(&copy.to_le_bytes());
+        let mut priority = [0u8; 16];
+        hash.finalize_variable(&mut priority)
+            .expect("valid digest output");
+        keyed.push((priority, card, *copy));
+        *copy += 1;
+    }
+    // Identity-keyed priorities make input order and replacement slot irrelevant.
+    // A copy index keeps repeated basic lands distinct. The lexical tie-break has
+    // negligible bias (128-bit key collisions), and makes all runs reproducible.
+    keyed.sort_unstable();
+    keyed.into_iter().map(|(_, card, _)| card.clone()).collect()
 }
 
 fn policy_gemstone_live(seed: u64, rate: f64, game_index: usize) -> bool {
@@ -9649,6 +9683,145 @@ fn visible_cache_key(
         key.push_str(card);
     }
     key
+}
+
+fn powder_visible_cache_key(
+    stage: usize,
+    bottom_count: usize,
+    gemstone_live: bool,
+    hand: &[String],
+    exiled: &[String],
+) -> String {
+    let mut key = visible_cache_key(stage, bottom_count, gemstone_live, hand);
+    if !exiled.is_empty() {
+        key.push_str("\x1ePOWDER_EXILED");
+        for card in exiled {
+            key.push('\x1f');
+            key.push_str(card);
+        }
+    }
+    key
+}
+
+fn serum_powder_preserve_priority(ctx: &FastContext, card: &str) -> i32 {
+    let Some(card_id) = ctx.card_id(card) else {
+        return 0;
+    };
+    let flags = ctx.card_spec(card_id).flags;
+    if flags.contains(CardFlags::ENGINE) {
+        500
+    } else if flags.contains(CardFlags::TUTOR) {
+        450
+    } else if flags.contains(CardFlags::MANA) {
+        400
+    } else if matches!(card, "Gitaxian Probe" | "Street Wraith") {
+        350
+    } else if flags.contains(CardFlags::CREATURE) {
+        100
+    } else if flags.contains(CardFlags::INTERACTION) {
+        50
+    } else {
+        0
+    }
+}
+
+fn serum_powder_bottom(
+    ctx: &FastContext,
+    hand: &[String],
+    bottom_count: usize,
+) -> Option<Vec<String>> {
+    if !hand.iter().any(|card| card == "Serum Powder")
+        || bottom_count > hand.len().saturating_sub(1)
+    {
+        return None;
+    }
+    let mut candidates: Vec<String> = hand
+        .iter()
+        .filter(|card| card.as_str() != "Serum Powder")
+        .cloned()
+        .collect();
+    candidates.sort_by(|left, right| {
+        serum_powder_preserve_priority(ctx, right)
+            .cmp(&serum_powder_preserve_priority(ctx, left))
+            .then_with(|| left.cmp(right))
+    });
+    let mut bottom = candidates
+        .into_iter()
+        .take(bottom_count)
+        .collect::<Vec<_>>();
+    bottom.sort();
+    Some(bottom)
+}
+
+fn serum_powder_redraw(
+    order: &[String],
+    powder_bottom: &[String],
+) -> Option<(Vec<String>, Vec<String>, Vec<String>)> {
+    if order.len() < 7 || !order[..7].iter().any(|card| card == "Serum Powder") {
+        return None;
+    }
+    let bottom_set: FxHashSet<&str> = powder_bottom.iter().map(String::as_str).collect();
+    let exiled: Vec<String> = order[..7]
+        .iter()
+        .filter(|card| !bottom_set.contains(card.as_str()))
+        .cloned()
+        .collect();
+    let draw_count = exiled.len();
+    if order.len() < 7 + draw_count {
+        return None;
+    }
+    let redraw = order[7..7 + draw_count].to_vec();
+    let mut library = order[7 + draw_count..].to_vec();
+    library.extend(powder_bottom.iter().cloned());
+    Some((exiled, redraw, library))
+}
+
+fn policy_visible_row(
+    ctx: &mut FastContext,
+    visible_cache: &mut FxHashMap<String, VisibleHandResponse>,
+    visible_request: &VisibleHandBatchRequest,
+    config: &FastSearchConfig,
+    stage: usize,
+    bottom_count: usize,
+    gemstone_live: bool,
+    hand: &[String],
+    available_deck: &[String],
+    exiled: &[String],
+    keep_threshold: f64,
+    force_keep: bool,
+    adaptive_threshold_sampling: bool,
+    seed: u64,
+) -> Result<(String, VisibleHandResponse), String> {
+    let cache_key = powder_visible_cache_key(stage, bottom_count, gemstone_live, hand, exiled);
+    if !visible_cache.contains_key(&cache_key) {
+        let seed_parts = vec![stage.to_string(), cache_key.clone()];
+        let task = VisibleHandTaskRequest {
+            key: cache_key.clone(),
+            hand: hand.to_vec(),
+            bottom_count,
+            seed: rust_stable_seed(seed, "policy_visible", &seed_parts, None),
+            gemstone_live,
+            keep_threshold: Some(keep_threshold),
+            force_keep,
+            adaptive_threshold_sampling,
+        };
+        let mut dynamic_request = visible_request.clone();
+        dynamic_request.deck = available_deck.to_vec();
+        let row = evaluate_visible_hand_fast_with_ctx(ctx, &dynamic_request, &task, config);
+        if row.unsupported {
+            return Err(row
+                .unsupported_reason
+                .unwrap_or_else(|| "visible-hand evaluator returned unsupported".to_string()));
+        }
+        visible_cache.insert(cache_key.clone(), row);
+    }
+    Ok((
+        cache_key.clone(),
+        visible_cache
+            .get(&cache_key)
+            .expect("visible cache row should be present")
+            .clone(),
+    ))
 }
 
 fn split_even_counts(total: usize, shards: usize) -> Vec<usize> {
@@ -9955,6 +10128,7 @@ pub fn evaluate_policy_fast(request: &PolicyEvalFastRequest) -> PolicyEvalFastRe
         })
         .collect();
     let mut active: Vec<usize> = (0..request.games).collect();
+    let mut powder_exiled_by_game = vec![Vec::<String>::new(); request.games];
     let mut visible_cache: FxHashMap<String, VisibleHandResponse> = FxHashMap::default();
     let mut resolved = FxHashSet::default();
     let mut successes = 0usize;
@@ -10008,76 +10182,189 @@ pub fn evaluate_policy_fast(request: &PolicyEvalFastRequest) -> PolicyEvalFastRe
         for game_index in active {
             let global_game_index = request.game_offset + game_index;
             let gemstone_live = gemstone_live_by_game[game_index];
-            let order = policy_shuffle_order(&request.deck, request.seed, global_game_index, stage);
+            let exiled_set: FxHashSet<&str> = powder_exiled_by_game[game_index]
+                .iter()
+                .map(String::as_str)
+                .collect();
+            let available_deck: Vec<String> = request
+                .deck
+                .iter()
+                .filter(|card| !exiled_set.contains(card.as_str()))
+                .cloned()
+                .collect();
+            let order =
+                policy_shuffle_order(&available_deck, request.seed, global_game_index, stage);
+            if order.len() < 7 {
+                return unsupported_policy_response(
+                    request,
+                    format!(
+                        "Serum Powder exiles left only {} cards before stage {stage}",
+                        order.len()
+                    ),
+                );
+            }
             let mut hand = order[..7].to_vec();
             hand.sort();
-            let cache_key = visible_cache_key(stage, bottom_count, gemstone_live, &hand);
-            if !visible_cache.contains_key(&cache_key) {
-                let seed_parts = vec![stage.to_string(), cache_key.clone()];
-                let task = VisibleHandTaskRequest {
-                    key: cache_key.clone(),
-                    hand: hand.clone(),
-                    bottom_count,
-                    seed: rust_stable_seed(request.seed, "policy_visible", &seed_parts, None),
-                    gemstone_live,
-                    keep_threshold: Some(if gemstone_live {
-                        request.thresholds_live[stage]
-                    } else {
-                        request.thresholds_dead[stage]
-                    }),
-                    force_keep: stage == COMMANDER_MULLIGAN_BOTTOMS_FAST.len() - 1,
-                    adaptive_threshold_sampling: request.adaptive_threshold_sampling,
-                };
-                let row =
-                    evaluate_visible_hand_fast_with_ctx(&mut ctx, &visible_request, &task, &config);
-                if row.unsupported {
-                    return unsupported_policy_response(
-                        request,
-                        row.unsupported_reason.unwrap_or_else(|| {
-                            "visible-hand evaluator returned unsupported".to_string()
-                        }),
-                    );
-                }
-                visible_cache.insert(cache_key.clone(), row);
-            }
-            let ev_row = visible_cache
-                .get(&cache_key)
-                .expect("visible cache row should be present");
             let keep_threshold = if gemstone_live {
                 request.thresholds_live[stage]
             } else {
                 request.thresholds_dead[stage]
             };
-            let keep_now = stage == COMMANDER_MULLIGAN_BOTTOMS_FAST.len() - 1
-                || ev_row.score_ev >= keep_threshold;
+            let force_keep = stage == COMMANDER_MULLIGAN_BOTTOMS_FAST.len() - 1;
+            let (mut cache_key, mut ev_row) = match policy_visible_row(
+                &mut ctx,
+                &mut visible_cache,
+                &visible_request,
+                &config,
+                stage,
+                bottom_count,
+                gemstone_live,
+                &hand,
+                &available_deck,
+                &powder_exiled_by_game[game_index],
+                keep_threshold,
+                force_keep,
+                request.adaptive_threshold_sampling,
+                request.seed,
+            ) {
+                Ok(row) => row,
+                Err(reason) => return unsupported_policy_response(request, reason),
+            };
+            let powder_continuation_value = if stage == 0 {
+                keep_threshold
+            } else if gemstone_live {
+                request.thresholds_live[stage - 1]
+            } else {
+                request.thresholds_dead[stage - 1]
+            };
+            let powder_bottom = serum_powder_bottom(&ctx, &hand, bottom_count);
+            let use_serum_powder =
+                powder_bottom.is_some() && ev_row.score_ev < powder_continuation_value;
+            let mut keep_now =
+                !use_serum_powder && (force_keep || ev_row.score_ev >= keep_threshold);
+            let powder_exiled = if use_serum_powder {
+                let bottom_set: FxHashSet<&str> = powder_bottom
+                    .as_ref()
+                    .expect("Powder use requires selected bottoms")
+                    .iter()
+                    .map(String::as_str)
+                    .collect();
+                hand.iter()
+                    .filter(|card| !bottom_set.contains(card.as_str()))
+                    .cloned()
+                    .collect()
+            } else {
+                Vec::new()
+            };
             if let Some(decisions_by_game) = mulligan_decisions_by_game.as_mut() {
                 decisions_by_game[game_index].push(PolicyMulliganDecisionRecord {
                     stage,
                     bottom_count,
                     gemstone_caverns_live: gemstone_live,
                     visible_hand: hand.clone(),
-                    best_bottom: ev_row.best_bottom.clone(),
+                    best_bottom: if use_serum_powder {
+                        powder_bottom
+                            .as_ref()
+                            .expect("Powder use requires selected bottoms")
+                            .clone()
+                    } else {
+                        ev_row.best_bottom.clone()
+                    },
+                    serum_powder_used: use_serum_powder,
+                    serum_powder_redraw: false,
+                    serum_powder_exiled: powder_exiled.clone(),
                     keep: keep_now,
-                    force_keep: stage == COMMANDER_MULLIGAN_BOTTOMS_FAST.len() - 1,
+                    force_keep: force_keep && !use_serum_powder,
                     score_ev: ev_row.score_ev,
                     upper_ev: ev_row.upper_ev,
                     keep_threshold,
                 });
+            }
+            let mut powder_library = None;
+            if use_serum_powder {
+                let powder_bottom = powder_bottom
+                    .as_ref()
+                    .expect("Powder use requires selected bottoms");
+                let Some((exiled_hand, mut redraw, remaining_library)) =
+                    serum_powder_redraw(&order, powder_bottom)
+                else {
+                    return unsupported_policy_response(
+                        request,
+                        "Serum Powder was selected without enough replacement cards".to_string(),
+                    );
+                };
+                powder_exiled_by_game[game_index].extend(exiled_hand);
+                powder_exiled_by_game[game_index].sort();
+                redraw.sort();
+                hand = redraw;
+                let mut redraw_deck = hand.clone();
+                redraw_deck.extend(remaining_library.iter().cloned());
+                (cache_key, ev_row) = match policy_visible_row(
+                    &mut ctx,
+                    &mut visible_cache,
+                    &visible_request,
+                    &config,
+                    stage,
+                    0,
+                    gemstone_live,
+                    &hand,
+                    &redraw_deck,
+                    &powder_exiled_by_game[game_index],
+                    keep_threshold,
+                    force_keep,
+                    request.adaptive_threshold_sampling,
+                    request.seed,
+                ) {
+                    Ok(row) => row,
+                    Err(reason) => return unsupported_policy_response(request, reason),
+                };
+                keep_now = force_keep || ev_row.score_ev >= keep_threshold;
+                powder_library = Some(remaining_library);
+                if let Some(decisions_by_game) = mulligan_decisions_by_game.as_mut() {
+                    decisions_by_game[game_index].push(PolicyMulliganDecisionRecord {
+                        stage,
+                        bottom_count: 0,
+                        gemstone_caverns_live: gemstone_live,
+                        visible_hand: hand.clone(),
+                        best_bottom: ev_row.best_bottom.clone(),
+                        serum_powder_used: false,
+                        serum_powder_redraw: true,
+                        serum_powder_exiled: powder_exiled_by_game[game_index].clone(),
+                        keep: keep_now,
+                        force_keep,
+                        score_ev: ev_row.score_ev,
+                        upper_ev: ev_row.upper_ev,
+                        keep_threshold,
+                    });
+                }
             }
             if !keep_now {
                 next_active.push(game_index);
                 continue;
             }
 
-            let bottom_set: FxHashSet<&str> =
-                ev_row.best_bottom.iter().map(String::as_str).collect();
-            let keep: Vec<String> = hand
-                .iter()
-                .filter(|card| !bottom_set.contains(card.as_str()))
-                .cloned()
-                .collect();
-            let mut library = order[7..].to_vec();
-            library.extend(ev_row.best_bottom.iter().cloned());
+            let (keep, library) = if let Some(library) = powder_library {
+                (hand.clone(), library)
+            } else {
+                let bottom_set: FxHashSet<&str> =
+                    ev_row.best_bottom.iter().map(String::as_str).collect();
+                let keep = hand
+                    .iter()
+                    .filter(|card| !bottom_set.contains(card.as_str()))
+                    .cloned()
+                    .collect();
+                let mut library = order[7..].to_vec();
+                library.extend(ev_row.best_bottom.iter().cloned());
+                (keep, library)
+            };
+            let recorded_bottom = if use_serum_powder {
+                powder_bottom
+                    .as_ref()
+                    .expect("Powder use requires selected bottoms")
+                    .clone()
+            } else {
+                ev_row.best_bottom.clone()
+            };
             let actual_seed_parts = vec![
                 global_game_index.to_string(),
                 stage.to_string(),
@@ -10215,7 +10502,7 @@ pub fn evaluate_policy_fast(request: &PolicyEvalFastRequest) -> PolicyEvalFastRe
                             bottom_count,
                             gemstone_caverns_live: gemstone_live,
                             visible_hand: hand.clone(),
-                            bottomed: ev_row.best_bottom.clone(),
+                            bottomed: recorded_bottom.clone(),
                             keep: keep.clone(),
                             library: library.clone(),
                             gamble_seed: actual_seed,
@@ -10240,7 +10527,7 @@ pub fn evaluate_policy_fast(request: &PolicyEvalFastRequest) -> PolicyEvalFastRe
                     bottom_count,
                     gemstone_caverns_live: gemstone_live,
                     visible_hand: hand.clone(),
-                    bottomed: ev_row.best_bottom.clone(),
+                    bottomed: recorded_bottom.clone(),
                     keep: keep.clone(),
                     library: library.clone(),
                     mulligan_decisions: mulligan_decisions_by_game
@@ -12764,6 +13051,52 @@ fn hash_value<T: Hash>(value: &T) -> u64 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn policy_orders_ignore_replacement_slot_and_preserve_shared_card_order() {
+        let deck: Vec<String> = ["A", "B", "C", "Forest", "Forest"]
+            .map(String::from)
+            .to_vec();
+        let mut reordered = deck.clone();
+        reordered.reverse();
+        let variant: Vec<String> = ["A", "Powder", "C", "Forest", "Forest"]
+            .map(String::from)
+            .to_vec();
+        for game in 0..100 {
+            for stage in 0..6 {
+                let original = policy_shuffle_order(&deck, 123, game, stage);
+                assert_eq!(original, policy_shuffle_order(&reordered, 123, game, stage));
+                let changed = policy_shuffle_order(&variant, 123, game, stage);
+                let shared_original: Vec<_> =
+                    original.iter().filter(|c| c.as_str() != "B").collect();
+                let shared_changed: Vec<_> =
+                    changed.iter().filter(|c| c.as_str() != "Powder").collect();
+                assert_eq!(shared_original, shared_changed);
+                assert_eq!(
+                    original.iter().filter(|c| c.as_str() == "Forest").count(),
+                    2
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn policy_priority_positions_are_balanced() {
+        let deck: Vec<String> = (0..10).map(|i| format!("Card {i}")).collect();
+        let mut counts = [[0usize; 10]; 10];
+        for game in 0..10_000 {
+            for (position, card) in policy_shuffle_order(&deck, 89, game, 0).iter().enumerate() {
+                let identity: usize = card.trim_start_matches("Card ").parse().unwrap();
+                counts[identity][position] += 1;
+            }
+        }
+        // A deterministic distribution regression, with a generous six-sigma
+        // margin per cell. Invariance tests above establish the coupling contract.
+        assert!(counts
+            .iter()
+            .flatten()
+            .all(|count| (820..1180).contains(count)));
+    }
+
     fn fast_action_set(actions: Vec<FastAction>) -> FxHashSet<(FastState, i32, bool)> {
         actions
             .into_iter()
@@ -14173,20 +14506,144 @@ mod tests {
     }
 
     #[test]
+    fn serum_powder_redraw_uses_the_post_bottom_hand_size_without_shuffling() {
+        let order = [
+            "Serum Powder",
+            "Opening A",
+            "Opening B",
+            "Opening C",
+            "Opening D",
+            "Opening E",
+            "Opening F",
+            "Redraw A",
+            "Redraw B",
+            "Redraw C",
+            "Redraw D",
+            "Redraw E",
+            "Redraw F",
+            "Redraw G",
+            "Library A",
+        ]
+        .map(str::to_string);
+        let powder_bottom = ["Opening A", "Opening B"].map(str::to_string);
+        let (exiled, redraw, library) =
+            serum_powder_redraw(&order, &powder_bottom).expect("Powder opening hand should redraw");
+
+        assert_eq!(
+            exiled,
+            [
+                "Serum Powder",
+                "Opening C",
+                "Opening D",
+                "Opening E",
+                "Opening F"
+            ]
+            .map(str::to_string)
+        );
+        assert_eq!(redraw, order[7..12]);
+        assert_eq!(
+            library,
+            [
+                "Redraw F",
+                "Redraw G",
+                "Library A",
+                "Opening A",
+                "Opening B"
+            ]
+            .map(str::to_string)
+        );
+    }
+
+    #[test]
+    fn serum_powder_bottom_preserves_engine_cards_before_interaction() {
+        let context = FastContext::with_card_names([
+            "Serum Powder",
+            "Rhystic Study",
+            "Demonic Tutor",
+            "Dark Ritual",
+            "Command Tower",
+            "Force of Will",
+            "Word of Seizing",
+        ]);
+        let hand = [
+            "Serum Powder",
+            "Rhystic Study",
+            "Demonic Tutor",
+            "Dark Ritual",
+            "Command Tower",
+            "Force of Will",
+            "Word of Seizing",
+        ]
+        .map(str::to_string);
+
+        assert_eq!(
+            serum_powder_bottom(&context, &hand, 3).expect("legal Powder bottoms"),
+            ["Command Tower", "Demonic Tutor", "Rhystic Study"].map(str::to_string)
+        );
+    }
+
+    #[test]
+    fn serum_powder_casts_for_three_and_taps_for_colorless() {
+        let mut context = FastContext::with_card_names(["Serum Powder"]);
+        let mut fixture = fixture_state(Vec::new());
+        fixture.hand.push("Serum Powder".to_string());
+        fixture.mana = [0, 0, 0, 0, 0, 3];
+        let state = FastState::from_fixture(&mut context, &fixture);
+        let mut actions = Vec::new();
+        generate_fast_artifact_spell_actions(&mut context, &mut actions, &state);
+        let powder_state = actions
+            .iter()
+            .find(|action| {
+                action
+                    .next_state
+                    .battlefield
+                    .iter()
+                    .any(|perm| perm.kind_enum() == FastPermKind::Powder)
+            })
+            .expect("Serum Powder cast action")
+            .next_state
+            .clone();
+        let powder = powder_state
+            .battlefield
+            .iter()
+            .copied()
+            .find(|perm| perm.kind_enum() == FastPermKind::Powder)
+            .expect("Serum Powder permanent");
+
+        assert!(fast_tap_options(&powder_state, powder)
+            .iter()
+            .any(|tap| matches!(tap, FastTap::Colorless(1))));
+    }
+
+    #[test]
     fn policy_games_are_invariant_to_internal_shard_boundaries() {
         let request = PolicyEvalFastRequest {
             deck: vec![
+                "Serum Powder".to_string(),
                 "Command Tower".to_string(),
                 "Ancient Tomb".to_string(),
                 "Lotus Petal".to_string(),
                 "Mana Vault".to_string(),
                 "Rhystic Study".to_string(),
                 "Heartwood Storyteller".to_string(),
-                "Blank".to_string(),
+                "Blank A".to_string(),
+                "Blank B".to_string(),
+                "Blank C".to_string(),
+                "Blank D".to_string(),
+                "Blank E".to_string(),
+                "Blank F".to_string(),
+                "Blank G".to_string(),
+                "Blank H".to_string(),
+                "Blank I".to_string(),
+                "Blank J".to_string(),
+                "Blank K".to_string(),
+                "Blank L".to_string(),
+                "Blank M".to_string(),
+                "Blank N".to_string(),
             ],
             commander: Some("Nick Fury, Agent of S.H.I.E.L.D.".to_string()),
-            thresholds_dead: vec![0.0; COMMANDER_MULLIGAN_BOTTOMS_FAST.len()],
-            thresholds_live: vec![0.0; COMMANDER_MULLIGAN_BOTTOMS_FAST.len()],
+            thresholds_dead: vec![1.1; COMMANDER_MULLIGAN_BOTTOMS_FAST.len()],
+            thresholds_live: vec![1.1; COMMANDER_MULLIGAN_BOTTOMS_FAST.len()],
             games: 12,
             seed: 71,
             game_offset: 0,
@@ -14205,7 +14662,7 @@ mod tests {
             adaptive_threshold_sampling: false,
             include_game_records: true,
             include_cap_replay_records: false,
-            include_validation_records: false,
+            include_validation_records: true,
             trace_lines: false,
             gamble_mode: Some("stochastic".to_string()),
             simplified_gamble: true,
@@ -14230,6 +14687,17 @@ mod tests {
             serde_json::to_value(sharded.game_records).unwrap(),
             serde_json::to_value(sequential.game_records).unwrap()
         );
+        assert_eq!(
+            serde_json::to_value(&sharded.validation_records).unwrap(),
+            serde_json::to_value(&sequential.validation_records).unwrap()
+        );
+        assert!(sequential
+            .validation_records
+            .as_ref()
+            .expect("validation records")
+            .iter()
+            .flat_map(|record| &record.mulligan_decisions)
+            .any(|decision| decision.serum_powder_used));
     }
 
     #[test]

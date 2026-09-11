@@ -11,6 +11,7 @@ import random
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -160,9 +161,21 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     tmp_path.replace(path)
 
 
-def stamp_result_source(path: Path, source_digest: str) -> None:
+def input_fingerprint(deck_path: Path, thresholds_path: Path | None) -> dict[str, Any]:
+    thresholds = None
+    if thresholds_path is not None:
+        payload = load_payload(thresholds_path)
+        thresholds = {
+            key: payload.get(key)
+            for key in ("thresholds", "thresholds_by_gemstone_caverns_live")
+        }
+    return {"deck_digest": deck_digest(deck_path), "shared_thresholds": thresholds}
+
+
+def stamp_result_source(path: Path, source_digest: str, fingerprint: dict[str, Any]) -> None:
     payload = load_payload(path)
     payload["engine_source_digest"] = source_digest
+    payload["comparison_inputs"] = fingerprint
     write_json_atomic(path, payload)
 
 
@@ -239,10 +252,19 @@ def result_payload_mismatches(
             mismatches.append("evaluation.game_records: missing")
         elif len(records) != args.eval_games:
             mismatches.append(f"evaluation.game_records: cached_len={len(records)} expected_len={args.eval_games}")
+        else:
+            try:
+                by_game = records_by_game(payload)
+                if set(by_game) != set(range(args.eval_games)):
+                    mismatches.append("evaluation.game_records: expected contiguous game indices starting at zero")
+            except ValueError as exc:
+                mismatches.append(str(exc))
     return mismatches
 
 
-def reusable_result_json(path: Path, args: argparse.Namespace, variant_name: str) -> bool:
+def reusable_result_json(
+    path: Path, args: argparse.Namespace, variant_name: str, fingerprint: dict[str, Any]
+) -> bool:
     if not path.exists():
         return False
     try:
@@ -251,6 +273,8 @@ def reusable_result_json(path: Path, args: argparse.Namespace, variant_name: str
         print(f"rerunning {variant_name}: existing result is unreadable ({exc})", flush=True)
         return False
     mismatches = result_payload_mismatches(payload, args, require_game_records=True)
+    if payload.get("comparison_inputs") != fingerprint:
+        mismatches.append("deck or shared threshold policy changed (or fingerprint missing)")
     if mismatches:
         preview = "; ".join(mismatches[:4])
         if len(mismatches) > 4:
@@ -313,6 +337,8 @@ def baseline_cache_key(args: argparse.Namespace, deck_json: Path) -> str:
 
 def validate_baseline_result_cache(payload: dict[str, Any], args: argparse.Namespace, source: Path) -> None:
     mismatches = result_payload_mismatches(payload, args, require_game_records=True)
+    if payload.get("comparison_inputs") != input_fingerprint((ROOT / args.deck_json).resolve(), None):
+        mismatches.append("baseline deck fingerprint differs or is missing")
     if mismatches:
         raise ValueError(f"Baseline result cache {source} does not match this run: " + "; ".join(mismatches))
 
@@ -321,7 +347,12 @@ def records_by_game(payload: dict[str, Any]) -> dict[int, dict[str, Any]]:
     records = payload.get("evaluation", {}).get("game_records") or []
     out: dict[int, dict[str, Any]] = {}
     for row in records:
-        out[int(row["game_index"])] = row
+        index = row.get("game_index") if isinstance(row, dict) else None
+        if type(index) is not int or index < 0:
+            raise ValueError("game_index must be a nonnegative integer")
+        if index in out:
+            raise ValueError(f"duplicate game_index: {index}")
+        out[index] = row
     return out
 
 
@@ -357,7 +388,7 @@ def normal_mean_ci(values: list[float], z: float = 1.959963984540054) -> tuple[f
         return 0.0, None, None
     mu = mean(values)
     if len(values) < 2:
-        return mu, mu, mu
+        return mu, None, None
     half = z * sample_sd(values) / math.sqrt(len(values))
     return mu, mu - half, mu + half
 
@@ -369,16 +400,30 @@ def bootstrap_mean_ci(
     seed: int,
     alpha: float = 0.05,
 ) -> tuple[float | None, float | None]:
-    if samples <= 0 or not values:
+    if samples <= 0 or len(values) < 2:
         return None, None
     rng = random.Random(seed)
     n = len(values)
     means: list[float] = []
-    for _ in range(samples):
-        total = 0.0
-        for _i in range(n):
-            total += values[rng.randrange(n)]
-        means.append(total / n)
+    counts = sorted(Counter(values).items())
+    binomial = getattr(rng, "binomialvariate", None)
+    if binomial is not None and len(counts) < n:
+        # Empirical bootstrap counts are multinomial. Conditional binomial draws
+        # sample that same law in O(distinct scores), rather than O(games).
+        for _ in range(samples):
+            remaining_draws = n
+            remaining_count = n
+            terms = []
+            for value, count in counts[:-1]:
+                drawn = binomial(remaining_draws, count / remaining_count)
+                terms.append(value * drawn)
+                remaining_draws -= drawn
+                remaining_count -= count
+            terms.append(counts[-1][0] * remaining_draws)
+            means.append(math.fsum(terms) / n)
+    else:
+        for _ in range(samples):
+            means.append(math.fsum(values[rng.randrange(n)] for _ in range(n)) / n)
     means.sort()
     low_index = max(0, min(samples - 1, int((alpha / 2) * samples)))
     high_index = max(0, min(samples - 1, int((1 - alpha / 2) * samples)))
@@ -402,7 +447,7 @@ def binomial_cdf_leq(k: int, n: int, p: float = 0.5) -> float:
 def mcnemar_exact_p(candidate_only: int, baseline_only: int) -> float | None:
     n = candidate_only + baseline_only
     if n == 0:
-        return None
+        return 1.0
     p = 2.0 * binomial_cdf_leq(min(candidate_only, baseline_only), n, 0.5)
     return min(1.0, p)
 
@@ -441,7 +486,11 @@ def paired_stats(
 ) -> tuple[PairedStats, list[dict[str, Any]]]:
     baseline_records = records_by_game(baseline_payload)
     candidate_records = records_by_game(candidate_payload)
-    shared_games = sorted(set(baseline_records) & set(candidate_records))
+    if not baseline_records or set(baseline_records) != set(candidate_records):
+        raise ValueError("paired comparison requires identical nonempty game-index sets")
+    if baseline_payload.get("seed") != candidate_payload.get("seed"):
+        raise ValueError("paired comparison requires matching root seeds")
+    shared_games = sorted(baseline_records)
     rate_deltas: list[float] = []
     score_deltas: list[float] = []
     rows: list[dict[str, Any]] = []
@@ -754,6 +803,11 @@ def main() -> int:
 
     _payload = read_moxfield(deck_json)
     variants = [Variant("baseline", None, None), *args.swap]
+    names = [variant.name for variant in variants]
+    if len(names) != len(set(names)):
+        raise ValueError("Variant names must be unique; 'baseline' is reserved")
+    if any(not name or name in {".", ".."} or "/" in name or "\\" in name for name in names):
+        raise ValueError("Variant names must be plain filenames without path separators")
     if len(variants) <= 1:
         raise ValueError("Provide at least one --swap for paired comparison.")
 
@@ -790,8 +844,7 @@ def main() -> int:
         if baseline_source is not None:
             baseline_deck = deck_dir / "baseline.json"
             baseline_result = result_dir / "baseline.json"
-            if args.force or not baseline_deck.exists():
-                write_variant_deck(deck_json, baseline_deck, None, None)
+            write_variant_deck(deck_json, baseline_deck, None, None)
             if baseline_source != baseline_result:
                 shutil.copyfile(baseline_source, baseline_result)
             result_paths["baseline"] = baseline_result
@@ -801,13 +854,13 @@ def main() -> int:
     for variant in variants_to_run:
         variant_deck = deck_dir / f"{variant.name}.json"
         result_json = result_dir / f"{variant.name}.json"
-        if args.force or not variant_deck.exists():
-            write_variant_deck(deck_json, variant_deck, variant.cut, variant.add, swaps=variant.swaps)
-        if args.force or not reusable_result_json(result_json, args, variant.name):
+        write_variant_deck(deck_json, variant_deck, variant.cut, variant.add, swaps=variant.swaps)
+        thresholds_json = baseline_thresholds_json if args.shared_thresholds and variant.name != "baseline" else None
+        fingerprint = input_fingerprint(deck_json if variant.name == "baseline" else variant_deck, thresholds_json)
+        if args.force or not reusable_result_json(result_json, args, variant.name, fingerprint):
             print(f"running {variant.name}", flush=True)
-            thresholds_json = baseline_thresholds_json if args.shared_thresholds and variant.name != "baseline" else None
             run_sim(args, variant_deck, result_json, thresholds_json=thresholds_json)
-            stamp_result_source(result_json, args.engine_source_digest)
+            stamp_result_source(result_json, args.engine_source_digest, fingerprint)
         else:
             print(f"reusing {variant.name}", flush=True)
         if variant.name == "baseline":

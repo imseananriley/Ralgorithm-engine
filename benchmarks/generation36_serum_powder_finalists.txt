@@ -1,0 +1,4 @@
+manamorphose_to_powder: Manamorphose=Serum Powder
+eldritch_to_powder: Eldritch Evolution=Serum Powder
+wishclaw_to_powder: Wishclaw Talisman=Serum Powder
+rain_to_powder: Rain of Filth=Serum Powder

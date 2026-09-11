@@ -22,10 +22,11 @@ ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 DATA_ROOT = ROOT / "data"
 DEFAULT_RUN_ROOT = DATA_ROOT / "rhystic_study_turn12"
+BENCHMARK_RUN_ROOT = ROOT / "benchmarks" / "results"
 NOTES_PATH = Path(__file__).resolve().parent / "notes.jsonl"
 MANIFEST_PATH = ROOT / "visualizer" / "card_manifest.json"
 CARD_CACHE_PATH = Path(__file__).resolve().parent / "card_cache.json"
-RUST_BIN = ROOT / "rust" / "rhystic_core" / "target" / "release" / "rhystic-core-smoke"
+RUST_BIN = ROOT / "target" / "release" / "rhystic-core-smoke"
 RUN_CACHE: dict[str, Any] = {"expires": 0.0, "runs": []}
 PROGRESS_CACHE: dict[str, Any] = {"expires": 0.0, "runs": []}
 RUN_SCAN_LIMIT = int(os.environ.get("VALIDATOR_RUN_SCAN_LIMIT", "140"))
@@ -82,7 +83,7 @@ def browser_safe_payload(payload: Any) -> Any:
     if isinstance(payload, dict):
         safe: dict[str, Any] = {}
         for key, value in payload.items():
-            if key == "gamble_seed" and isinstance(value, int):
+            if (key == "seed" or key.endswith("_seed")) and isinstance(value, int):
                 safe[key] = str(value)
             else:
                 safe[key] = browser_safe_payload(value)
@@ -303,7 +304,7 @@ def list_runs() -> list[dict[str, Any]]:
     if RUN_CACHE["expires"] > now:
         return list(RUN_CACHE["runs"])
     runs: list[dict[str, Any]] = []
-    roots = [DEFAULT_RUN_ROOT]
+    roots = [DEFAULT_RUN_ROOT, BENCHMARK_RUN_ROOT]
     candidates: list[tuple[float, Path]] = []
     for root in roots:
         if not root.exists():
@@ -315,25 +316,17 @@ def list_runs() -> list[dict[str, Any]]:
                 continue
     candidates.sort(key=lambda item: item[0], reverse=True)
     for _, path in candidates[:RUN_SCAN_LIMIT]:
-            try:
-                size = path.stat().st_size
-                if size > 250 * 1024 * 1024:
-                    continue
-                sample = path.read_bytes()
-                if not (
-                    b'"validation_records": [' in sample
-                    or b'"cap_replay_records": [' in sample
-                    or b'"game_records": [' in sample
-                ):
-                    continue
-                payload = load_json_file(path)
-                if not isinstance(payload, dict):
-                    continue
-                summary = summarize_run(path, payload)
-                if summary:
-                    runs.append(summary)
-            except Exception:
+        try:
+            if path.stat().st_size > 250 * 1024 * 1024:
                 continue
+            payload = load_json_file(path)
+            if not isinstance(payload, dict):
+                continue
+            summary = summarize_run(path, payload)
+            if summary:
+                runs.append(summary)
+        except (OSError, ValueError, TypeError):
+            continue
     runs.sort(key=lambda item: (item["mtime"], item["path"]), reverse=True)
     RUN_CACHE["runs"] = runs
     RUN_CACHE["expires"] = now + 15.0
@@ -444,6 +437,8 @@ def run_rust_solve(request: dict[str, Any]) -> dict[str, Any]:
     if not lines:
         raise RuntimeError("rust solver returned no output")
     response = json.loads(lines[-1])
+    if not isinstance(response, dict) or response.get("error"):
+        raise RuntimeError(f"Rust solver rejected request: {response}")
     response["request"] = request
     response["hit"] = response.get("turn") is not None and int(response["turn"]) <= int(request["max_turns"])
     return response
@@ -481,7 +476,11 @@ def run_rust_solve_batch(requests: list[dict[str, Any]], strict_hidden: bool | N
     responses = json.loads(lines[-1])
     if not isinstance(responses, list):
         raise RuntimeError("rust solver batch returned non-list output")
+    if len(responses) != len(requests):
+        raise RuntimeError("rust solver batch returned an incorrect number of results")
     for response, request in zip(responses, requests):
+        if not isinstance(response, dict) or response.get("error"):
+            raise RuntimeError(f"Rust solver rejected batch request: {response}")
         response["request"] = request
         response["hit"] = response.get("turn") is not None and int(response["turn"]) <= int(request["max_turns"])
     return responses

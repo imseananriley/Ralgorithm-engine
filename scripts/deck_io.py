@@ -9,15 +9,24 @@ from typing import Any
 
 
 CARD_LINE = re.compile(r"^\s*(\d+)\s+(.+?)\s*$")
+BASIC_LANDS = frozenset({
+    "Plains", "Island", "Swamp", "Mountain", "Forest", "Wastes",
+    "Snow-Covered Plains", "Snow-Covered Island", "Snow-Covered Swamp",
+    "Snow-Covered Mountain", "Snow-Covered Forest",
+})
 
 
 def commander_names(payload: dict[str, Any]) -> list[str]:
     commanders = payload.get("commanders")
     if isinstance(commanders, list) and commanders:
-        return [str(name).strip() for name in commanders if str(name).strip()]
+        return [name.strip() for name in commanders if isinstance(name, str) and name.strip()]
     commander = payload.get("commander")
     if isinstance(commander, str) and commander.strip():
-        return [commander.strip()]
+        names = [commander.strip()]
+        secondary = payload.get("secondary_commander")
+        if isinstance(secondary, str) and secondary.strip():
+            names.append(secondary.strip())
+        return names
     return []
 
 
@@ -28,6 +37,16 @@ def validate_deck_payload(payload: dict[str, Any]) -> list[str]:
         return ["deck must be a JSON array of card names"]
     if any(not isinstance(card, str) or not card.strip() for card in deck):
         errors.append("every deck entry must be a non-empty card name")
+    valid_names = [card.strip() for card in deck if isinstance(card, str) and card.strip()]
+    if any(isinstance(card, str) and card != card.strip() for card in deck):
+        errors.append("card names must not contain leading or trailing whitespace")
+
+    if "commanders" in payload and (
+        not isinstance(payload["commanders"], list)
+        or not payload["commanders"]
+        or any(not isinstance(name, str) or not name.strip() for name in payload["commanders"])
+    ):
+        errors.append("commanders must be a non-empty JSON array of card names")
 
     commanders = commander_names(payload)
     if not commanders:
@@ -44,10 +63,10 @@ def validate_deck_payload(payload: dict[str, Any]) -> list[str]:
             f"{len(commanders)} commander(s)"
         )
 
-    duplicates = sorted(card for card, count in Counter(deck).items() if count > 1)
+    duplicates = sorted(card for card, count in Counter(valid_names).items() if count > 1 and card not in BASIC_LANDS)
     if duplicates:
         errors.append(f"duplicate mainboard cards: {', '.join(duplicates)}")
-    overlap = sorted(set(deck) & set(commanders))
+    overlap = sorted(set(valid_names) & set(commanders))
     if overlap:
         errors.append(f"commanders also appear in the mainboard: {', '.join(overlap)}")
 

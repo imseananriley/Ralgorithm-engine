@@ -139,6 +139,7 @@ ACTION_CARDS = {
     "Rhystic Study": ("modeled", "engine", "native objective engine"),
     "Rite of Flame": ("modeled", "ritual", "R to RR"),
     "Scheming Symmetry": ("modeled", "top_tutor", "top-tutors engine"),
+    "Serum Powder": ("modeled", "mulligan_mana_artifact", "casts for 3 and taps for C; after required bottoms, low-EV hands may be exiled to redraw the current hand size"),
     "Simian Spirit Guide": ("modeled", "free_mana", "exiles for R"),
     "Sol Ring": ("modeled", "mana_artifact", "casts for 1, taps for CC"),
     "Springleaf Drum": ("modeled", "mana_artifact", "casts for 1; taps any untapped creature for any color"),
