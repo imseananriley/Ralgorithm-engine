@@ -399,7 +399,7 @@ fn sample_seed(root_seed: u64, sample_index: u64) -> u64 {
 fn seed_bytes(root_seed: u64, sample_index: u64, domain: u64) -> [u8; 32] {
     let mut seed = [0; 32];
     let mut value = root_seed ^ domain ^ sample_index.rotate_left(17);
-    for chunk in seed.chunks_exact_mut(8) {
+    for chunk in seed.as_chunks_mut::<8>().0 {
         value = splitmix64(value);
         chunk.copy_from_slice(&value.to_le_bytes());
     }
